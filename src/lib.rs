@@ -7,6 +7,7 @@ pub mod coordinator;
 pub mod fleet;
 pub mod job_runner;
 pub mod jobs;
+pub mod lineage;
 pub mod node;
 pub mod scheduler;
 pub mod state;
