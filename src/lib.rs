@@ -2,6 +2,7 @@
 
 pub mod adapter;
 pub mod api;
+pub mod capabilities;
 pub mod config;
 pub mod coordinator;
 pub mod fleet;
