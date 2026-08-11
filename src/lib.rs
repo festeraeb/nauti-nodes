@@ -13,6 +13,7 @@ pub mod node;
 pub mod scheduler;
 pub mod state;
 pub mod types;
+pub mod work;
 pub mod worker;
 
 pub use config::{Config, RuntimeMode};
