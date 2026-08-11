@@ -35,70 +35,9 @@ pub fn inference_url_for(host: &str, port: i64) -> String {
     }
 }
 
-/// Static fallback when Forge is offline (cesarops2 local first; T440/P100 when not isolated).
-pub fn fallback_fleet() -> Vec<NodeMetadata> {
-    let isolated = std::env::var("CESAROPS2_ISOLATED").ok().as_deref() == Some("1")
-        || std::env::var("NAUTI_AVOID_P100").ok().as_deref() == Some("1");
-    let mut nodes = vec![
-        fleet_node(
-            "RTX2060",
-            "http://127.0.0.1:5200",
-            "thinker",
-            "RTX 2060 SUPER",
-            8192,
-        ),
-        fleet_node(
-            "GTX1070",
-            "http://127.0.0.1:5571",
-            "reviewer",
-            "GTX 1070",
-            8192,
-        ),
-    ];
-    if isolated {
-        return nodes;
-    }
-    nodes.extend([
-        fleet_node(
-            "RTX2060-LAN",
-            "http://10.0.0.201:5200",
-            "thinker",
-            "RTX 2060 SUPER",
-            8192,
-        ),
-        fleet_node(
-            "GTX1070-LAN",
-            "http://10.0.0.201:5571",
-            "reviewer",
-            "GTX 1070",
-            8192,
-        ),
-        fleet_node(
-            "M2200",
-            "http://100.110.214.86:5571",
-            "validator",
-            "Quadro M2200",
-            4096,
-        ),
-        fleet_node(
-            "P100-Coder",
-            "http://127.0.0.1:5001",
-            "coder",
-            "P100 #1",
-            16384,
-        ),
-        fleet_node(
-            "P100-Reviewer",
-            "http://127.0.0.1:5002",
-            "reviewer",
-            "P100 #2",
-            16384,
-        ),
-    ]);
-    nodes
-}
-
-fn fleet_node(id: &str, url: &str, role: &str, gpu: &str, vram: u32) -> NodeMetadata {
+/// Build a NodeMetadata from raw fields (test-only helper).
+#[cfg(test)]
+pub fn fleet_node(id: &str, url: &str, role: &str, gpu: &str, vram: u32) -> NodeMetadata {
     NodeMetadata {
         id: id.to_string(),
         addr: url.to_string(),
@@ -130,18 +69,18 @@ pub async fn fetch_fleet_from_forge(
         Ok(r) => r,
         Err(e) => {
             warn!("forge fleet fetch failed: {e}");
-            return fallback_fleet();
+            return Vec::new();
         }
     };
     if !resp.status().is_success() {
         warn!("forge fleet HTTP {}", resp.status());
-        return fallback_fleet();
+        return Vec::new();
     }
     let body: GpuFleet = match resp.json().await {
         Ok(b) => b,
         Err(e) => {
             warn!("forge fleet json: {e}");
-            return fallback_fleet();
+            return Vec::new();
         }
     };
     let mut out = Vec::new();
@@ -187,7 +126,8 @@ pub async fn fetch_fleet_from_forge(
         });
     }
     if out.is_empty() {
-        fallback_fleet()
+        debug!("forge returned empty GPU list; federation has no known nodes");
+        Vec::new()
     } else {
         debug!(count = out.len(), "forge fleet synced");
         out
@@ -203,4 +143,37 @@ pub async fn probe_online(client: &reqwest::Client, base_url: &str) -> bool {
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inference_url_for_local() {
+        assert_eq!(inference_url_for("local", 5200), "http://127.0.0.1:5200");
+        assert_eq!(inference_url_for("", 8080), "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn inference_url_for_http_prefix() {
+        assert_eq!(inference_url_for("http://10.0.0.1:5200", 0), "http://10.0.0.1:5200");
+        assert_eq!(inference_url_for("https://example.com:443", 0), "https://example.com:443");
+    }
+
+    #[test]
+    fn inference_url_for_hostname() {
+        assert_eq!(inference_url_for("myhost", 5571), "http://myhost:5571");
+    }
+
+    #[tokio::test]
+    async fn unreachable_forge_returns_empty_fleet() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(500))
+            .build()
+            .unwrap();
+        // Forge at an unreachable address returns empty, not fake nodes
+        let nodes = fetch_fleet_from_forge(&client, "http://127.0.0.1:1").await;
+        assert!(nodes.is_empty(), "unreachable Forge must return empty fleet, got {} nodes", nodes.len());
+    }
 }
