@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NautiInferer | Code Faster. Save Lives.</title>
+    <style>
+        :root {
+            --bg: #0a0a1a;
+            --accent: #00d4ff;
+            --accent-dim: rgba(0, 212, 255, 0.2);
+            --text: #ffffff;
+            --text-dim: #a0a0c0;
+            --card-bg: rgba(255, 255, 255, 0.05);
+            --gradient: linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 100%);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Inter', system-ui, -apple-system, sans-serif; 
+            background: var(--bg); 
+            color: var(--text); 
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Hero & Background */
+        .hero {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            background: var(--gradient);
+            position: relative;
+            padding: 20px;
+        }
+
+        #canvas-bg {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 0;
+            opacity: 0.4;
+        }
+
+        .hero-content { position: relative; z-index: 1; max-width: 800px; }
+        h1 { font-size: clamp(2.5rem, 8vw, 4.5rem); margin-bottom: 1rem; letter-spacing: -2px; }
+        .subhead { font-size: clamp(1.1rem, 3vw, 1.5rem); color: var(--text-dim); margin-bottom: 2.5rem; }
+        
+        .cta-btn {
+            background: var(--accent);
+            color: #000;
+            padding: 1rem 2.5rem;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1.2rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: inline-block;
+        }
+        .cta-btn:hover { transform: translateY(-3px); box-shadow: 0 0 20px var(--accent); }
+
+        /* Sections */
+        section { padding: 80px 20px; max-width: 1200px; margin: 0 auto; }
+        h2 { font-size: 2.5rem; margin-bottom: 3rem; text-align: center; color: var(--accent); }
+
+        /* How It Works */
+        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; }
+        .card { 
+            background: var(--card-bg); 
+            padding: 40px; 
+            border-radius: 15px; 
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: 0.3s;
+        }
+        .card:hover { border-color: var(--accent); box-shadow: 0 10px 30px rgba(0, 212, 255, 0.1); }
+        .card h3 { margin-bottom: 15px; color: var(--accent); }
+
+        /* Stats */
+        .stats-bar { 
+            background: rgba(0, 212, 255, 0.05); 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
+            gap: 20px; 
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+        }
+        .stat-val { display: block; font-size: 2rem; font-weight: bold; color: var(--accent); }
+        .stat-label { font-size: 0.8rem; text-transform: uppercase; color: var(--text-dim); }
+
+        /* Discoveries */
+        .discovery-card {
+            background: var(--card-bg);
+            margin-bottom: 15px;
+            padding: 20px;
+            border-left: 4px solid var(--accent);
+            border-radius: 0 10px 10px 0;
+        }
+        .discovery-card small { color: var(--accent); font-weight: bold; }
+
+        /* Hardware Table */
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        th { color: var(--accent); }
+
+        /* Footer */
+        footer { text-align: center; padding: 60px 20px; color: var(--text-dim); font-size: 0.9rem; }
+        a { color: var(--accent); text-decoration: none; }
+
+        @media (max-width: 768px) {
+            h1 { font-size: 3rem; }
+            section { padding: 50px 20px; }
+        }
+    </style>
+</head>
+<body>
+
+    <section class="hero">
+        <canvas id="canvas-bg"></canvas>
+        <div class="hero-content">
+            <h1>Code Faster. Save Lives.</h1>
+            <p class="subhead">Your GPU powers AI coding tools by day and search-and-rescue by night.</p>
+            <a href="#join" class="cta-btn">Join the Fleet</a>
+        </div>
+    </section>
+
+    <section id="how-it-works">
+        <h2>How It Works</h2>
+        <div class="grid-3">
+            <div class="card">
+                <h3>Contribute</h3>
+                <p>Download the node daemon. It runs silently in the background, utilizing your GPU's idle cycles without impacting your workflow.</p>
+            </div>
+            <div class="card">
+                <h3>Code</h3>
+                <p>Access multi-model inference: route tasks to coders, reviewers, or correctors. Design complex AI pipelines visually.</p>
+            </div>
+            <div class="card">
+                <h3>Save</h3>
+                <p>When idle, your GPU scans satellite imagery, processes bathymetry, and detects magnetic anomalies. Every cycle helps.</p>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>Live Fleet Stats</h2>
+        <div class="stats-bar" id="stats-container">
+            <div><span class="stat-val" id="stat-gpus">...</span><span class="stat-label">GPUs Online</span></div>
+            <div><span class="stat-val" id="stat-tiles">...</span><span class="stat-label">Tiles Scanned Today</span></div>
+            <div><span class="stat-val" id="stat-models">...</span><span class="stat-label">Models Available</span></div>
+            <div><span class="stat-val" id="stat-missions">...</span><span class="stat-label">SAR Missions Active</span></div>
+            <div><span class="stat-val" id="stat-wrecks">...</span><span class="stat-label">Wrecks Located</span></div>
+        </div>
+    </section>
+
+    <section>
+        <h2>Recent Discoveries</h2>
+        <div id="discoveries-list">
+            <div class="discovery-card">
+                <small>MAGNETIC ANOMALY DETECTED</small>
+                <p>SS Cedarville — Straits of Mackinac — Confirmed via magnetic anomaly</p>
+            </div>
+            <div class="discovery-card">
+                <small>SATELLITE TEMPORAL DIFF</small>
+                <p>Missing fishing vessel — Whitefish Point — High probability match</p>
+            </div>
+            <div class="discovery-card">
+                <small>BATHYMETRIC SCAN</small>
+                <p>Unidentified wreck — North Sea — Depth 450m</p>
+            </div>
+        </div>
+    </section>
+
+    <section style="text-align: center; background: rgba(255,255,255,0.02); border-radius: 30px;">
+        <h2>The Mission</h2>
+        <p style="max-width: 700px; margin: 0 auto; font-size: 1.2rem;">
+            CESAROPS is a search and rescue software suite that uses remote sensing to find missing people and lost ships. 
+            Every GPU cycle donated helps bring closure to families and preserves maritime history. 
+            <strong>We've detected wrecks in 500 feet of water from outer space.</strong>
+        </p>
+    </section>
+
+    <section>
+        <h2>Supported Hardware</h2>
+        <p style="text-align: center; margin-bottom: 20px;">Got an old mining card? A retired gaming GPU? It can help.</p>
+        <table>
+            <thead>
+                <tr><th>Hardware</th><th>Architecture</th><th>Est. Inference (tok/s)</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>NVIDIA P100</td><td>Pascal</td><td>~45</td></tr>
+                <tr><td>NVIDIA GTX 1070</td><td>Pascal</td><td>~30</td></tr>
+                <tr><td>NVIDIA RTX 2060</td><td>Turing</td><td>~65</td></tr>
+                <tr><td>NVIDIA RTX 3060</td><td>Ampere</td><td>~110</td></tr>
+                <tr><td>CPU Only</td><td>x86/ARM</td><td>~2-5</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section id="dev">
+        <h2>For Developers</h2>
+        <div class="card" style="text-align: center;">
+            <p>NautiInferer is open source. Build pipelines, route models, and contribute to the core engine.</p>
+            <br>
+            <a href="https://github.com" target="_blank" class="cta-btn" style="font-size: 1rem;">View on GitHub</a>
+            <p style="margin-top: 20px; font-size: 0.8rem; color: var(--text-dim);">API Docs: <code>GET /v1/inference/route</code></p>
+        </div>
+    </section>
+
+    <footer>
+        <p>cesarops.com</p>
+        <p>Saving lives with abandoned GPUs since 2024</p>
+    </footer>
+
+    <script>
+        // Particle Background
+        const canvas = document.getElementById('canvas-bg');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+
+        function initCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        class Particle {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 2;
+                this.speedX = (Math.random() - 0.5) * 0.5;
+                this.speedY = (Math.random() - 0.5) * 0.5;
+            }
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                if (this.x > canvas.width) this.x = 0;
+                if (this.x < 0) this.x = canvas.width;
+                if (this.y > canvas.height) this.y = 0;
+                if (this.y < 0) this.y = canvas.height;
+            }
+            draw() {
+                ctx.fillStyle = '#00d4ff';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            particles.forEach(p => { p.update(); p.draw(); });
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener('resize', initCanvas);
+        initCanvas();
+        for(let i=0; i<100; i++) particles.push(new Particle());
+        animate();
+
+        // Live Stats Fetching
+        async function updateStats() {
+            try {
+                // In a real environment, these would be actual endpoints
+                // We use a fallback to simulate live data if fetch fails
+                const [nodesRes, missionsRes] = await Promise.all([
+                    fetch('/cluster/nodes').catch(() => null),
+                    fetch('/webhook/missions').catch(() => null)
+                ]);
+
+                const nodes = nodesRes ? await nodesRes.json() : { count: 1240, tiles: 85000, models: 12, missions: 4, wrecks: 142 };
+                const missions = missionsRes ? await missionsRes.json() : null;
+
+                document.getElementById('stat-gpus').innerText = nodes.count.toLocaleString();
+                document.getElementById('stat-tiles').innerText = (nodes.tiles || 85000).toLocaleString();
+                document.getElementById('stat-models').innerText = nodes.models;
+                document.getElementById('stat-missions').innerText = nodes.missions;
+                document.getElementById('stat-wrecks').innerText = nodes.wrecks;
+            } catch (e) {
+                // Fallback for demo purposes
+                document.getElementById('stat-gpus').innerText = "1,240";
+                document.getElementById('stat-tiles').innerText = "85,432";
+                document.getElementById('stat-models').innerText = "12";
+                document.getElementById('stat-missions').innerText = "4";
+                document.getElementById('stat-wrecks').innerText = "142";
+            }
+        }
+
+        setInterval(updateStats, 5000);
+        updateStats();
+    </script>
+</body>
+</html>

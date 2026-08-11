@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+*.log
+nauti.db
+nauti.db-*
+coordinator.log
+t440_worker.log

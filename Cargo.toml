@@ -1,0 +1,43 @@
+[package]
+name = "nauti-nodes"
+version = "0.1.0"
+edition = "2021"
+description = "Nauti Nodes: distributed GPU node federation for inference workloads. Worker registration, heartbeat, affinity-aware routing, OpenAI-compatible streaming, and Forge Fleet / model runtime adapter integration."
+authors = ["CESAROPS"]
+license = "AGPL-3.0"
+repository = "https://github.com/festeraeb/nauti-nodes"
+readme = "README.md"
+keywords = ["inference", "distributed", "gpu", "federation", "routing"]
+categories = ["distributed-systems", "api-bindings"]
+
+[lib]
+name = "nauti_nodes"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nauti-nodes"
+path = "src/main.rs"
+
+[dependencies]
+dashmap = "6"
+tokio = { version = "1", features = ["full", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+async-stream = "0.3"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "stream"] }
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = true
+strip = true
