@@ -359,6 +359,24 @@ pub async fn sync_fleet_now(State(state): State<AppState>) -> Json<serde_json::V
     Json(serde_json::json!({ "synced": n }))
 }
 
+pub async fn node_identity(State(state): State<AppState>) -> Json<serde_json::Value> {
+    match &state.identity {
+        Some(id) => {
+            let pub_hex: String = id.public_key.iter().map(|b| format!("{b:02x}")).collect();
+            Json(serde_json::json!({
+                "node_id": id.node_id,
+                "public_key_hex": pub_hex,
+                "created_at_ms": id.created_at_ms,
+                "software_version": id.software_version,
+            }))
+        }
+        None => Json(serde_json::json!({
+            "node_id": null,
+            "error": "identity not loaded",
+        })),
+    }
+}
+
 pub async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "nodes": state.registry.list_nodes().len(),

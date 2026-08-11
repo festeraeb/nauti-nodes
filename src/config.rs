@@ -13,6 +13,7 @@ pub struct Config {
     pub listen_port: u16,
     pub db_url: String,
     pub auth_keypair_path: String,
+    pub identity_path: String,
     pub forge_url: String,
     pub coordinator_url: String,
     pub local_inference_url: String,
@@ -28,6 +29,7 @@ impl Default for Config {
             listen_port: 8099,
             db_url: "sqlite:nauti.db".to_string(),
             auth_keypair_path: "/var/lib/nauti-inferer/auth.key".to_string(),
+            identity_path: "/var/lib/nauti-nodes/identity.json".to_string(),
             forge_url: "http://127.0.0.1:9100".to_string(),
             coordinator_url: "http://127.0.0.1:8099".to_string(),
             local_inference_url: "http://127.0.0.1:5200".to_string(),
@@ -54,6 +56,9 @@ impl Config {
                 "worker" => RuntimeMode::Worker,
                 _ => RuntimeMode::Coordinator,
             };
+        }
+        if let Ok(v) = std::env::var("NAUTI_IDENTITY_PATH") {
+            c.identity_path = v;
         }
         if let Ok(v) = std::env::var("FORGE_URL") {
             c.forge_url = v;

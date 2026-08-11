@@ -14,7 +14,14 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
         .try_init()
         .ok();
 
-    let state = AppState::new(config.clone())?;
+    // Load or create durable node identity
+    let identity = crate::node::identity::NodeIdentity::load_or_create(
+        std::path::Path::new(&config.identity_path),
+    )?;
+    info!(node_id = %identity.node_id, "node identity established");
+
+    let mut state = AppState::new(config.clone())?;
+    state.identity = Some(std::sync::Arc::new(identity));
     fleet::sync_fleet(&state.registry, &state.http, &config.forge_url).await;
 
     heartbeat::spawn_sweeper(state.registry.clone(), 15, 30);

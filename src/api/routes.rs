@@ -18,6 +18,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/models", get(handlers::list_models))
         .route("/v1/nodes", get(handlers::list_nodes))
+        .route("/v1/node/identity", get(handlers::node_identity))
         .route("/internal/worker/register", post(handlers::worker_register))
         .route(
             "/internal/worker/heartbeat",

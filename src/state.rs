@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::jobs::JobStore;
+use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::scheduler::Scheduler;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ pub struct AppState {
     pub scheduler: Arc<Scheduler>,
     pub jobs: Arc<JobStore>,
     pub http: reqwest::Client,
+    pub identity: Option<Arc<NodeIdentity>>,
 }
 
 impl AppState {
@@ -27,6 +29,7 @@ impl AppState {
             scheduler,
             jobs: Arc::new(JobStore::new()),
             http,
+            identity: None,
         })
     }
 }
