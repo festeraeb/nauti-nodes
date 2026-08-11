@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::jobs::JobStore;
+use crate::lineage::LineageStore;
 use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::scheduler::Scheduler;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub jobs: Arc<JobStore>,
     pub http: reqwest::Client,
     pub identity: Option<Arc<NodeIdentity>>,
+    pub lineage: Option<Arc<LineageStore>>,
 }
 
 impl AppState {
@@ -30,6 +32,7 @@ impl AppState {
             jobs: Arc::new(JobStore::new()),
             http,
             identity: None,
+            lineage: None,
         })
     }
 }

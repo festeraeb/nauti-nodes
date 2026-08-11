@@ -377,6 +377,77 @@ pub async fn node_identity(State(state): State<AppState>) -> Json<serde_json::Va
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct JoinRequest {
+    pub node_id: String,
+    pub parent_node_id: String,
+    pub public_key_hex: String,
+    pub software_version: String,
+    pub capabilities: Option<serde_json::Value>,
+}
+
+pub async fn node_join(
+    State(state): State<AppState>,
+    Json(req): Json<JoinRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let lineage = state.lineage.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "lineage not initialized".to_string(),
+    ))?;
+
+    let rel = lineage
+        .add_child(&req.node_id, &req.parent_node_id)
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+
+    info!(child = %req.node_id, parent = %req.parent_node_id, depth = rel.depth, "node joined lineage");
+
+    Ok(Json(serde_json::json!({
+        "node_id": req.node_id,
+        "parent_node_id": rel.parent_node_id,
+        "root_node_id": rel.root_node_id,
+        "branch_id": rel.branch_id,
+        "depth": rel.depth,
+        "status": "active",
+    })))
+}
+
+pub async fn tree_snapshot(State(state): State<AppState>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let lineage = state.lineage.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "lineage not initialized".to_string(),
+    ))?;
+
+    let relationships = lineage
+        .all_active()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let root = lineage
+        .root_node_id()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let nodes: Vec<serde_json::Value> = relationships
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "node_id": r.node_id,
+                "parent_node_id": r.parent_node_id,
+                "root_node_id": r.root_node_id,
+                "branch_id": r.branch_id,
+                "depth": r.depth,
+                "status": r.status.as_str(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "root_node_id": root,
+        "nodes": nodes,
+        "count": nodes.len(),
+    })))
+}
+
+use tracing::info;
+
 pub async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "nodes": state.registry.list_nodes().len(),

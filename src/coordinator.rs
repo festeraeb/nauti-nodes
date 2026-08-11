@@ -20,8 +20,13 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
     )?;
     info!(node_id = %identity.node_id, "node identity established");
 
+    // Initialize lineage store and register self as root
+    let lineage = crate::lineage::LineageStore::open(&config.db_url)?;
+    lineage.set_root(&identity.node_id)?;
+
     let mut state = AppState::new(config.clone())?;
     state.identity = Some(std::sync::Arc::new(identity));
+    state.lineage = Some(std::sync::Arc::new(lineage));
     fleet::sync_fleet(&state.registry, &state.http, &config.forge_url).await;
 
     heartbeat::spawn_sweeper(state.registry.clone(), 15, 30);
