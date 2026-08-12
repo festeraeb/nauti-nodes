@@ -1,5 +1,6 @@
 pub mod affinity;
 pub mod lineage_scheduler;
+pub mod pull;
 pub mod quotas;
 pub mod scoring;
 
