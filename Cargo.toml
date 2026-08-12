@@ -37,6 +37,7 @@ reqwest = { version = "0.11", features = ["json", "rustls-tls", "stream"] }
 axum = { version = "0.7", features = ["macros"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
