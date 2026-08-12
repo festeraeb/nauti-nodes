@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod lineage;
 pub mod metrics;
 pub mod node;
+pub mod preemption;
 pub mod runtime;
 pub mod scheduler;
 pub mod state;
