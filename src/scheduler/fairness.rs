@@ -335,40 +335,57 @@ mod tests {
         let report = simulate_fairness(30, 2, 1);
         assert_eq!(report.total_decisions, 30);
         assert!(report.same_lineage_served > 0);
+        assert_eq!(report.starvation_events, 0);
     }
 
     #[test]
     fn simulation_300_decisions() {
         let report = simulate_fairness(300, 3, 2);
         assert_eq!(report.total_decisions, 300);
-        // With 3 lineages and round-robin, same-lineage should get more service
         assert!(report.same_lineage_served > report.external_lineage_served);
+        assert_eq!(report.starvation_events, 0);
     }
 
     #[test]
     fn simulation_3000_decisions() {
         let report = simulate_fairness(3000, 3, 2);
         assert_eq!(report.total_decisions, 3000);
-        // Ratio should be close to 2:1
         assert!(
-            report.service_ratio > 1.0,
-            "ratio {} should be > 1.0",
+            report.service_ratio >= 1.8 && report.service_ratio <= 2.2,
+            "ratio {} should be close to 2.0",
             report.service_ratio
         );
+        assert_eq!(report.starvation_events, 0);
     }
 
     #[test]
     fn simulation_30000_decisions() {
         let report = simulate_fairness(30000, 3, 2);
         assert_eq!(report.total_decisions, 30000);
-        // Same-lineage should dominate with 2:1 weighting
         assert!(
-            report.same_lineage_served > 0,
-            "same lineage should be served at least once"
+            report.service_ratio >= 1.8 && report.service_ratio <= 2.2,
+            "ratio {} should be close to 2.0 (got {})",
+            report.service_ratio,
+            report.service_ratio
         );
-        // Per-lineage tracking should account for all decisions
+        assert_eq!(report.starvation_events, 0);
         let total_tracked: u64 = report.per_lineage.values().sum();
         assert_eq!(total_tracked, 30000);
+        assert!(report.passed, "Fairness report should pass strict 2:1 bounds");
+    }
+
+    #[test]
+    fn simulation_300000_decisions() {
+        let report = simulate_fairness(300000, 3, 2);
+        assert_eq!(report.total_decisions, 300000);
+        assert!(
+            report.service_ratio >= 1.9 && report.service_ratio <= 2.1,
+            "ratio {} should converge to 2.0 (got {})",
+            report.service_ratio,
+            report.service_ratio
+        );
+        assert_eq!(report.starvation_events, 0);
+        assert!(report.passed, "Fairness report should pass strict 2:1 convergence");
     }
 
     #[test]
