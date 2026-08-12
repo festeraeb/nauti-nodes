@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::jobs::JobStore;
 use crate::lineage::LineageStore;
+use crate::metrics::FederationMetrics;
 use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::scheduler::Scheduler;
@@ -15,6 +16,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub identity: Option<Arc<NodeIdentity>>,
     pub lineage: Option<Arc<LineageStore>>,
+    pub metrics: FederationMetrics,
 }
 
 impl AppState {
@@ -33,6 +35,7 @@ impl AppState {
             http,
             identity: None,
             lineage: None,
+            metrics: FederationMetrics::new(),
         })
     }
 }

@@ -448,9 +448,16 @@ pub async fn tree_snapshot(State(state): State<AppState>) -> Result<Json<serde_j
 
 use tracing::info;
 
+pub async fn prometheus_metrics(State(state): State<AppState>) -> String {
+    let m = &state.metrics;
+    m.federation_nodes_total.store(state.registry.list_nodes().len() as u64, Ordering::Relaxed);
+    m.render_prometheus()
+}
+
 pub async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "nodes": state.registry.list_nodes().len(),
-        "active_jobs": state.jobs.active_count(),
-    }))
+    let m = &state.metrics;
+    m.federation_nodes_total.store(state.registry.list_nodes().len() as u64, Ordering::Relaxed);
+    let mut json = m.snapshot_json();
+    json["active_jobs"] = serde_json::json!(state.jobs.active_count());
+    Json(json)
 }
