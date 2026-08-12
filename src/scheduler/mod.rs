@@ -3,6 +3,7 @@ pub mod fairness;
 pub mod lineage_scheduler;
 pub mod pull;
 pub mod quotas;
+pub mod scale_sim;
 pub mod scoring;
 
 use crate::node::registry::NodeRegistry;
