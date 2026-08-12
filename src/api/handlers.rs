@@ -287,8 +287,13 @@ pub async fn worker_register(
     State(state): State<AppState>,
     Json(req): Json<SignedJoinRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    req.verify(&state.nonce_tracker)
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    // Verify auth with distinct HTTP codes for each failure class.
+    use crate::node::auth::AuthError;
+    req.verify(&state.nonce_tracker).map_err(|e| match &e {
+        AuthError::StaleRequest { .. } => (StatusCode::FORBIDDEN, e.to_string()),
+        AuthError::ReplayedNonce(_) => (StatusCode::CONFLICT, e.to_string()),
+        _ => (StatusCode::UNAUTHORIZED, e.to_string()),
+    })?;
     state.nonce_tracker.mark_used(req.nonce.clone());
 
     let role = req.role.clone();
