@@ -49,6 +49,7 @@ pub fn connect_worker(
         online: true,
         capabilities: req.capabilities,
         public_key: req.public_key,
+        ..Default::default()
     })
 }
 

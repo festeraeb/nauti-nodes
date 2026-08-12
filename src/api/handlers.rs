@@ -283,11 +283,84 @@ pub async fn landing_page() -> Html<&'static str> {
     Html(include_str!("../../landing.html"))
 }
 
+pub async fn fetch_observed_hardware(
+    client: &reqwest::Client,
+    forge_url: &str,
+    node_id: &str,
+) -> Option<crate::types::ObservedHardware> {
+    let url = format!("{}/cluster/gpus", forge_url.trim_end_matches('/'));
+    if let Ok(resp) = client.get(&url).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(gpus) = body.get("gpus").and_then(|g| g.as_array()) {
+                    for gpu in gpus {
+                        let worker_name = gpu.get("worker_name").and_then(|v| v.as_str()).unwrap_or("");
+                        let node = gpu.get("node").and_then(|v| v.as_str()).unwrap_or("");
+                        if worker_name == node_id || node == node_id || node_id.contains(worker_name) || node_id.contains(node) {
+                            let gpu_name = gpu.get("name").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_string();
+                            let vram_mb = gpu.get("vram_mb").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let backend = gpu.get("backend").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            let temp_c = gpu.get("temperature_c").and_then(|v| v.as_f64()).map(|t| t as u32);
+                            return Some(crate::types::ObservedHardware {
+                                gpu_name,
+                                vram_mb,
+                                vendor: backend,
+                                device_count: 1,
+                                observed_at: crate::types::now_ms(),
+                                driver_version: None,
+                                temperature_c: temp_c,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let local_gpus = crate::gpu::discover_gpus();
+    if !local_gpus.is_empty() {
+        if node_id == "cognitive-worker" {
+            if let Some(gpu) = local_gpus.iter().find(|g| g.name.contains("2060") || g.name.contains("RTX")) {
+                return Some(crate::types::ObservedHardware {
+                    gpu_name: gpu.name.clone(),
+                    vram_mb: gpu.total_memory_mb,
+                    vendor: gpu.vendor.clone(),
+                    device_count: local_gpus.len() as u32,
+                    observed_at: crate::types::now_ms(),
+                    driver_version: gpu.driver_version.clone(),
+                    temperature_c: gpu.temperature_c.map(|t| t as u32),
+                });
+            }
+            if let Some(gpu) = local_gpus.first() {
+                return Some(crate::types::ObservedHardware {
+                    gpu_name: gpu.name.clone(),
+                    vram_mb: gpu.total_memory_mb,
+                    vendor: gpu.vendor.clone(),
+                    device_count: local_gpus.len() as u32,
+                    observed_at: crate::types::now_ms(),
+                    driver_version: gpu.driver_version.clone(),
+                    temperature_c: gpu.temperature_c.map(|t| t as u32),
+                });
+            }
+        }
+    }
+    None
+}
+
+pub async fn reconcile_node(
+    client: &reqwest::Client,
+    forge_url: &str,
+    meta: &mut crate::types::NodeMetadata,
+) {
+    let observed = fetch_observed_hardware(client, forge_url, &meta.id).await;
+    meta.observed = observed.clone();
+    meta.last_hardware_probe = Some(crate::types::now_ms());
+    meta.reconciliation = crate::types::reconcile_claim(&meta.claim, &meta.observed);
+}
+
 pub async fn worker_register(
     State(state): State<AppState>,
     Json(req): Json<SignedJoinRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // Verify auth with distinct HTTP codes for each failure class.
     use crate::node::auth::AuthError;
     req.verify(&state.nonce_tracker).map_err(|e| match &e {
         AuthError::StaleRequest { .. } => (StatusCode::FORBIDDEN, e.to_string()),
@@ -297,7 +370,17 @@ pub async fn worker_register(
     state.nonce_tracker.mark_used(req.nonce.clone());
 
     let role = req.role.clone();
-    let meta = NodeMetadata {
+    let claim = crate::types::RegisteredHardwareClaim {
+        gpu_name: req.gpu_name.clone(),
+        vram_mb: req.vram_mb,
+        models: if req.models.is_empty() {
+            vec!["default".into()]
+        } else {
+            req.models.clone()
+        },
+    };
+
+    let mut meta = NodeMetadata {
         id: req.node_id.clone(),
         addr: req.inference_url.clone(),
         inference_url: req.inference_url,
@@ -315,7 +398,15 @@ pub async fn worker_register(
             vram_mb: req.vram_mb,
             role,
         },
+        claim,
+        observed: None,
+        reconciliation: crate::types::ReconciledHardwareState::default(),
+        last_hardware_probe: None,
+        health_state: "ONLINE".to_string(),
     };
+
+    reconcile_node(&state.http, &state.config.forge_url, &mut meta).await;
+
     if state.registry.get_node(&req.node_id).is_some() {
         if let Some(rt) = state.registry.get_node(&req.node_id) {
             if let Ok(mut md) = rt.metadata.write() {
@@ -366,10 +457,75 @@ pub async fn worker_heartbeat(
         tokens_per_sec: req.tokens_per_sec,
         ..Default::default()
     });
-    if let Ok(mut md) = rt.metadata.write() {
-        md.online = true;
+
+    let needs_reconcile = {
+        if let Ok(md) = rt.metadata.read() {
+            let elapsed = md.last_hardware_probe.map(|t| crate::types::now_ms().saturating_sub(t)).unwrap_or(u64::MAX);
+            elapsed > 10000
+        } else {
+            false
+        }
+    };
+
+    if needs_reconcile {
+        let observed = fetch_observed_hardware(&state.http, &state.config.forge_url, &req.node_id).await;
+        if let Ok(mut md) = rt.metadata.write() {
+            md.online = true;
+            md.health_state = "ONLINE".to_string();
+            md.observed = observed;
+            md.last_hardware_probe = Some(crate::types::now_ms());
+            md.reconciliation = crate::types::reconcile_claim(&md.claim, &md.observed);
+        }
+    } else {
+        if let Ok(mut md) = rt.metadata.write() {
+            md.online = true;
+            md.health_state = "ONLINE".to_string();
+        }
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AdminReconciliationResponse {
+    pub node_id: String,
+    pub status: String,
+    pub claim: serde_json::Value,
+    pub observed: serde_json::Value,
+    pub reconciliation: serde_json::Value,
+}
+
+pub async fn admin_reconciliation(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let nodes = state.registry.list_nodes();
+    let mut out = Vec::new();
+    for rt in nodes {
+        if let Ok(md) = rt.metadata.read() {
+            let observed_val = if let Some(obs) = &md.observed {
+                serde_json::json!({
+                    "gpu": obs.gpu_name,
+                    "vram_mb": obs.vram_mb,
+                    "observed_at": obs.observed_at
+                })
+            } else {
+                serde_json::Value::Null
+            };
+            out.push(AdminReconciliationResponse {
+                node_id: md.id.clone(),
+                status: md.health_state.clone(),
+                claim: serde_json::json!({
+                    "gpu": md.claim.gpu_name,
+                    "vram_mb": md.claim.vram_mb
+                }),
+                observed: observed_val,
+                reconciliation: serde_json::json!({
+                    "status": format!("{:?}", md.reconciliation.status),
+                    "fields": md.reconciliation.fields
+                }),
+            });
+        }
+    }
+    Json(out)
 }
 
 pub async fn sync_fleet_now(State(state): State<AppState>) -> Json<serde_json::Value> {

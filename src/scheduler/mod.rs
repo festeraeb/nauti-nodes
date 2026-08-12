@@ -149,6 +149,7 @@ mod tests {
                 vram_mb: 8192,
                 role: "coder".into(),
             },
+            ..Default::default()
         }
     }
 

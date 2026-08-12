@@ -8,10 +8,82 @@ use tracing::info;
 
 pub async fn sync_fleet(registry: &NodeRegistry, client: &reqwest::Client, forge_url: &str) {
     let nodes = forge::fetch_fleet_from_forge(client, forge_url).await;
+    
+    let mut observed_gpus = Vec::new();
+    let url = format!("{}/cluster/gpus", forge_url.trim_end_matches('/'));
+    if let Ok(resp) = client.get(&url).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(gpus) = body.get("gpus").and_then(|g| g.as_array()) {
+                    observed_gpus = gpus.clone();
+                }
+            }
+        }
+    }
+
     for meta in nodes {
         let online = forge::probe_online(client, &meta.inference_url).await;
         let mut m = meta;
         m.online = online;
+
+        m.claim = crate::types::RegisteredHardwareClaim {
+            gpu_name: m.gpu_name.clone(),
+            vram_mb: m.capabilities.vram_mb,
+            models: m.capabilities.models.clone(),
+        };
+
+        let mut observed = None;
+        for gpu in &observed_gpus {
+            let worker_name = gpu.get("worker_name").and_then(|v| v.as_str()).unwrap_or("");
+            let node = gpu.get("node").and_then(|v| v.as_str()).unwrap_or("");
+            if worker_name == m.id || node == m.id || m.id.contains(worker_name) || m.id.contains(node) {
+                let gpu_name = gpu.get("name").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_string();
+                let vram_mb = gpu.get("vram_mb").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let backend = gpu.get("backend").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                let temp_c = gpu.get("temperature_c").and_then(|v| v.as_f64()).map(|t| t as u32);
+                observed = Some(crate::types::ObservedHardware {
+                    gpu_name,
+                    vram_mb,
+                    vendor: backend,
+                    device_count: 1,
+                    observed_at: crate::types::now_ms(),
+                    driver_version: None,
+                    temperature_c: temp_c,
+                });
+                break;
+            }
+        }
+
+        if observed.is_none() {
+            let local_gpus = crate::gpu::discover_gpus();
+            if !local_gpus.is_empty() {
+                if m.id == "cognitive-worker" {
+                    if let Some(gpu) = local_gpus.iter().find(|g| g.name.contains("2060") || g.name.contains("RTX")) {
+                        observed = Some(crate::types::ObservedHardware {
+                            gpu_name: gpu.name.clone(),
+                            vram_mb: gpu.total_memory_mb,
+                            vendor: gpu.vendor.clone(),
+                            device_count: local_gpus.len() as u32,
+                            observed_at: crate::types::now_ms(),
+                            driver_version: gpu.driver_version.clone(),
+                            temperature_c: gpu.temperature_c.map(|t| t as u32),
+                        });
+                    }
+                }
+            }
+        }
+
+        m.observed = observed;
+        m.last_hardware_probe = Some(crate::types::now_ms());
+        m.reconciliation = crate::types::reconcile_claim(&m.claim, &m.observed);
+
+        if online {
+            m.health_state = "ONLINE".to_string();
+        } else {
+            m.health_state = "OFFLINE".to_string();
+            m.reconciliation.status = crate::types::ReconciliationStatus::OFFLINE;
+        }
+
         let id = m.id.clone();
         if registry.get_node(&id).is_some() {
             if let Some(rt) = registry.get_node(&id) {

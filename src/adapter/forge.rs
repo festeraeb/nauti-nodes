@@ -52,6 +52,7 @@ pub fn fleet_node(id: &str, url: &str, role: &str, gpu: &str, vram: u32) -> Node
             vram_mb: vram,
             role: role.to_string(),
         },
+        ..Default::default()
     }
 }
 
@@ -123,6 +124,7 @@ pub async fn fetch_fleet_from_forge(
                 },
                 role,
             },
+            ..Default::default()
         });
     }
     if out.is_empty() {

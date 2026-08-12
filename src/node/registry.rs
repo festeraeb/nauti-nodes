@@ -46,18 +46,35 @@ impl NodeRegistry {
     }
 
     pub fn remove_stale(&self, stale_after_ms: u64, now_ms: u64) -> Vec<NodeId> {
-        let mut removed = Vec::new();
-        self.nodes.retain(|id, rt| {
+        use crate::types::ReconciliationStatus;
+        let mut changed = Vec::new();
+        for mut ref_multi in self.nodes.iter_mut() {
+            let rt = ref_multi.value();
             let age = now_ms.saturating_sub(rt.last_heartbeat_ms());
-            if age > stale_after_ms {
-                warn!(node_id = %id, age_ms = age, "removing stale node");
-                removed.push(id.clone());
-                false
-            } else {
-                true
+            if let Ok(mut md) = rt.metadata.write() {
+                let prev_health = md.health_state.clone();
+                if age > stale_after_ms {
+                    md.health_state = "OFFLINE".to_string();
+                    md.online = false;
+                    md.reconciliation.status = ReconciliationStatus::OFFLINE;
+                    if prev_health != "OFFLINE" {
+                        changed.push(md.id.clone());
+                    }
+                } else if age > 15000 {
+                    md.health_state = "STALE".to_string();
+                    md.reconciliation.status = ReconciliationStatus::STALE;
+                    if prev_health != "STALE" {
+                        changed.push(md.id.clone());
+                    }
+                } else {
+                    md.health_state = "ONLINE".to_string();
+                    if prev_health != "ONLINE" {
+                        changed.push(md.id.clone());
+                    }
+                }
             }
-        });
-        removed
+        }
+        changed
     }
 }
 
@@ -81,6 +98,7 @@ mod tests {
                 vram_mb: 8192,
                 role: "coder".into(),
             },
+            ..Default::default()
         }
     }
 

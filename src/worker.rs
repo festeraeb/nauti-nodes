@@ -109,5 +109,6 @@ pub fn local_worker_meta(config: &Config) -> NodeMetadata {
             vram_mb: 8192,
             role: config.worker_role.clone(),
         },
+        ..Default::default()
     }
 }
