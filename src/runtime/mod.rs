@@ -69,10 +69,20 @@ pub trait ModelRuntime: Send + Sync {
     async fn ensure_model_available(&self, model_id: &str) -> Result<bool, String>;
 
     /// Perform a non-streaming inference request.
-    async fn infer(&self, model: &str, messages: Vec<ChatMessage>, max_tokens: Option<u32>) -> Result<InferenceResponse, String>;
+    async fn infer(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        max_tokens: Option<u32>,
+    ) -> Result<InferenceResponse, String>;
 
     /// Perform a streaming inference request.
-    async fn stream(&self, model: &str, messages: Vec<ChatMessage>, max_tokens: Option<u32>) -> Result<InferenceStream, String>;
+    async fn stream(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        max_tokens: Option<u32>,
+    ) -> Result<InferenceStream, String>;
 }
 
 /// A chat message for inference.
@@ -132,7 +142,13 @@ impl ModelRuntime for OpenAICompatibleRuntime {
 
     async fn health(&self) -> RuntimeHealth {
         let url = format!("{}/health", self.endpoint_url.trim_end_matches('/'));
-        match self.client.get(&url).timeout(std::time::Duration::from_secs(3)).send().await {
+        match self
+            .client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => RuntimeHealth::Healthy,
             Ok(_) => RuntimeHealth::Degraded,
             Err(_) => RuntimeHealth::Unavailable,
@@ -147,7 +163,9 @@ impl ModelRuntime for OpenAICompatibleRuntime {
                     if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
                         return data
                             .iter()
-                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                            .filter_map(|m| {
+                                m.get("id").and_then(|id| id.as_str()).map(String::from)
+                            })
                             .collect();
                     }
                 }
@@ -165,12 +183,22 @@ impl ModelRuntime for OpenAICompatibleRuntime {
         }
     }
 
-    async fn infer(&self, _model: &str, _messages: Vec<ChatMessage>, _max_tokens: Option<u32>) -> Result<InferenceResponse, String> {
+    async fn infer(
+        &self,
+        _model: &str,
+        _messages: Vec<ChatMessage>,
+        _max_tokens: Option<u32>,
+    ) -> Result<InferenceResponse, String> {
         // Placeholder; real implementation proxies to the OpenAI-compatible endpoint
         Err("not implemented: use existing job_runner for inference".into())
     }
 
-    async fn stream(&self, _model: &str, _messages: Vec<ChatMessage>, _max_tokens: Option<u32>) -> Result<InferenceStream, String> {
+    async fn stream(
+        &self,
+        _model: &str,
+        _messages: Vec<ChatMessage>,
+        _max_tokens: Option<u32>,
+    ) -> Result<InferenceStream, String> {
         Err("not implemented: use existing job_runner for streaming".into())
     }
 }
@@ -181,7 +209,12 @@ mod tests {
 
     #[test]
     fn runtime_health_roundtrip() {
-        for h in [RuntimeHealth::Healthy, RuntimeHealth::Degraded, RuntimeHealth::Unavailable, RuntimeHealth::Unknown] {
+        for h in [
+            RuntimeHealth::Healthy,
+            RuntimeHealth::Degraded,
+            RuntimeHealth::Unavailable,
+            RuntimeHealth::Unknown,
+        ] {
             let s = h.as_str();
             assert!(!s.is_empty());
         }

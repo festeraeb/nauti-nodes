@@ -9,7 +9,9 @@
 //! - Supports streaming and cancellation
 
 use crate::capabilities::RuntimeClass;
-use crate::runtime::{ChatMessage, InferenceResponse, InferenceStream, ModelRuntime, RuntimeHealth, RuntimeProbe};
+use crate::runtime::{
+    ChatMessage, InferenceResponse, InferenceStream, ModelRuntime, RuntimeHealth, RuntimeProbe,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -162,7 +164,10 @@ impl ModelRuntime for LemonadeRuntime {
             .map_err(|e| format!("lemonade inference request failed: {}", e))?;
 
         if !resp.status().is_success() {
-            return Err(format!("lemonade inference returned status {}", resp.status()));
+            return Err(format!(
+                "lemonade inference returned status {}",
+                resp.status()
+            ));
         }
 
         let json: serde_json::Value = resp
@@ -276,9 +281,6 @@ mod tests {
     fn lemonade_url_building() {
         let runtime = LemonadeRuntime::new(LemonadeConfig::default());
         assert_eq!(runtime.url("/health"), "http://127.0.0.1:8000/health");
-        assert_eq!(
-            runtime.url("/v1/models"),
-            "http://127.0.0.1:8000/v1/models"
-        );
+        assert_eq!(runtime.url("/v1/models"), "http://127.0.0.1:8000/v1/models");
     }
 }

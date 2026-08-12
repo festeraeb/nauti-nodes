@@ -274,10 +274,7 @@ fn privacy_meets(node_class: &PrivacyClass, required: &PrivacyClass) -> bool {
 ///
 /// Creates `num_lineages` lineages, each with `nodes_per_lineage` nodes.
 /// Nodes have varying GPU sizes and latencies.
-pub fn build_federation(
-    num_lineages: usize,
-    nodes_per_lineage: usize,
-) -> Vec<SimFederationNode> {
+pub fn build_federation(num_lineages: usize, nodes_per_lineage: usize) -> Vec<SimFederationNode> {
     let mut nodes = Vec::new();
     for l in 0..num_lineages {
         let lineage_id = format!("lineage-{}", l);
@@ -459,11 +456,26 @@ mod tests {
 
     #[test]
     fn privacy_meets_check() {
-        assert!(privacy_meets(&PrivacyClass::Restricted, &PrivacyClass::Restricted));
-        assert!(privacy_meets(&PrivacyClass::Restricted, &PrivacyClass::Public));
-        assert!(privacy_meets(&PrivacyClass::Internal, &PrivacyClass::Internal));
-        assert!(!privacy_meets(&PrivacyClass::Public, &PrivacyClass::Internal));
-        assert!(!privacy_meets(&PrivacyClass::Internal, &PrivacyClass::Restricted));
+        assert!(privacy_meets(
+            &PrivacyClass::Restricted,
+            &PrivacyClass::Restricted
+        ));
+        assert!(privacy_meets(
+            &PrivacyClass::Restricted,
+            &PrivacyClass::Public
+        ));
+        assert!(privacy_meets(
+            &PrivacyClass::Internal,
+            &PrivacyClass::Internal
+        ));
+        assert!(!privacy_meets(
+            &PrivacyClass::Public,
+            &PrivacyClass::Internal
+        ));
+        assert!(!privacy_meets(
+            &PrivacyClass::Internal,
+            &PrivacyClass::Restricted
+        ));
     }
 
     #[test]

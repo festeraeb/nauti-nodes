@@ -94,17 +94,17 @@ impl SignedJoinRequest {
         }
 
         // 3. Parse public key
-        let pub_bytes = hex::decode(&self.public_key_hex)
-            .map_err(|_| AuthError::InvalidPublicKey)?;
+        let pub_bytes =
+            hex::decode(&self.public_key_hex).map_err(|_| AuthError::InvalidPublicKey)?;
         let pub_array: [u8; 32] = pub_bytes
             .try_into()
             .map_err(|_| AuthError::InvalidPublicKey)?;
-        let verifying_key = VerifyingKey::from_bytes(&pub_array)
-            .map_err(|_| AuthError::InvalidPublicKey)?;
+        let verifying_key =
+            VerifyingKey::from_bytes(&pub_array).map_err(|_| AuthError::InvalidPublicKey)?;
 
         // 4. Parse signature
-        let sig_bytes = hex::decode(&self.signature_hex)
-            .map_err(|_| AuthError::InvalidSignature)?;
+        let sig_bytes =
+            hex::decode(&self.signature_hex).map_err(|_| AuthError::InvalidSignature)?;
         let sig_array: [u8; 64] = sig_bytes
             .try_into()
             .map_err(|_| AuthError::InvalidSignature)?;
@@ -158,16 +158,14 @@ pub fn verify_signature(
     message: &str,
     signature_hex: &str,
 ) -> Result<(), AuthError> {
-    let pub_bytes =
-        hex::decode(public_key_hex).map_err(|_| AuthError::InvalidPublicKey)?;
+    let pub_bytes = hex::decode(public_key_hex).map_err(|_| AuthError::InvalidPublicKey)?;
     let pub_array: [u8; 32] = pub_bytes
         .try_into()
         .map_err(|_| AuthError::InvalidPublicKey)?;
     let verifying_key =
         VerifyingKey::from_bytes(&pub_array).map_err(|_| AuthError::InvalidPublicKey)?;
 
-    let sig_bytes =
-        hex::decode(signature_hex).map_err(|_| AuthError::InvalidSignature)?;
+    let sig_bytes = hex::decode(signature_hex).map_err(|_| AuthError::InvalidSignature)?;
     let sig_array: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| AuthError::InvalidSignature)?;
@@ -347,7 +345,10 @@ mod tests {
         let tracker = NonceTracker::new();
         let result = req.verify(&tracker);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AuthError::StaleRequest { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            AuthError::StaleRequest { .. }
+        ));
     }
 
     #[test]
@@ -375,10 +376,7 @@ mod tests {
 
         let result = req.verify(&tracker);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            AuthError::ReplayedNonce(_)
-        ));
+        assert!(matches!(result.unwrap_err(), AuthError::ReplayedNonce(_)));
     }
 
     #[test]
@@ -421,9 +419,6 @@ mod tests {
         let tracker = NonceTracker::new();
         let result = req.verify(&tracker);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            AuthError::SignatureMismatch
-        ));
+        assert!(matches!(result.unwrap_err(), AuthError::SignatureMismatch));
     }
 }

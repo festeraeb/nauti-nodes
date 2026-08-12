@@ -73,7 +73,11 @@ pub struct PreemptibleJob {
 }
 
 impl PreemptibleJob {
-    pub fn new(job_id: impl Into<String>, node_id: impl Into<String>, checkpointable: bool) -> Self {
+    pub fn new(
+        job_id: impl Into<String>,
+        node_id: impl Into<String>,
+        checkpointable: bool,
+    ) -> Self {
         Self {
             job_id: job_id.into(),
             node_id: node_id.into(),
@@ -255,7 +259,11 @@ impl PreemptionManager {
 
     /// Release a Forge reservation (mission complete).
     pub fn release_reservation(&self, mission_id: &str) -> bool {
-        self.reservations.lock().unwrap().remove(mission_id).is_some()
+        self.reservations
+            .lock()
+            .unwrap()
+            .remove(mission_id)
+            .is_some()
     }
 
     /// Resume all checkpointed jobs on a node.

@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::jobs::JobStore;
 use crate::lineage::LineageStore;
 use crate::metrics::FederationMetrics;
+use crate::node::auth::NonceTracker;
 use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::scheduler::Scheduler;
@@ -17,6 +18,7 @@ pub struct AppState {
     pub identity: Option<Arc<NodeIdentity>>,
     pub lineage: Option<Arc<LineageStore>>,
     pub metrics: FederationMetrics,
+    pub nonce_tracker: Arc<NonceTracker>,
 }
 
 impl AppState {
@@ -36,6 +38,7 @@ impl AppState {
             identity: None,
             lineage: None,
             metrics: FederationMetrics::new(),
+            nonce_tracker: Arc::new(NonceTracker::new()),
         })
     }
 }

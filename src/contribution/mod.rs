@@ -44,7 +44,13 @@ impl ContributionRecord {
     }
 
     /// Record a completed work unit.
-    pub fn record_completion(&mut self, compute_secs: f64, gpu_secs: f64, bytes_in: u64, bytes_out: u64) {
+    pub fn record_completion(
+        &mut self,
+        compute_secs: f64,
+        gpu_secs: f64,
+        bytes_in: u64,
+        bytes_out: u64,
+    ) {
         self.completed_work_units += 1;
         self.compute_seconds += compute_secs;
         self.gpu_seconds += gpu_secs;
@@ -123,7 +129,8 @@ impl ContributionLedger {
     }
 
     pub fn update<F: FnOnce(&mut ContributionRecord)>(&self, node_id: &str, f: F) {
-        let mut entry = self.records
+        let mut entry = self
+            .records
             .entry(node_id.to_string())
             .or_insert_with(|| ContributionRecord::new(node_id));
         f(entry.value_mut());

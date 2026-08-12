@@ -90,29 +90,33 @@ impl FairnessReport {
 /// should receive roughly 2x the service opportunities compared
 /// to external-lineage nodes.
 pub struct LineageFairnessScheduler {
-    /// Lineage service counters for weighted round-robin
-    lineage_credits: HashMap<String, f64>,
-
-    /// Credit increment for same-lineage (2.0)
-    same_lineage_weight: f64,
-
-    /// Credit increment for external-lineage (1.0)
-    external_lineage_weight: f64,
+    /// Virtual time accumulated for same-lineage service
+    same_vtime: f64,
+    /// Virtual time accumulated for external-lineage service
+    ext_vtime: f64,
+    /// Quantum weight for same-lineage (2.0)
+    same_weight: f64,
+    /// Quantum weight for external-lineage (1.0)
+    ext_weight: f64,
+    /// Usage counts per node to ensure round-robin tie-breaking
+    node_usage: HashMap<String, u64>,
 }
 
 impl LineageFairnessScheduler {
     pub fn new() -> Self {
         Self {
-            lineage_credits: HashMap::new(),
-            same_lineage_weight: 2.0,
-            external_lineage_weight: 1.0,
+            same_vtime: 0.0,
+            ext_vtime: 0.0,
+            same_weight: 2.0,
+            ext_weight: 1.0,
+            node_usage: HashMap::new(),
         }
     }
 
-    /// Select a node for a work request using weighted lineage fairness.
+    /// Select a node for a work request using weighted virtual time.
     ///
-    /// Same-lineage nodes accumulate credits at 2x the rate of external-lineage nodes.
-    /// The node with the highest accumulated credits is selected.
+    /// Ensures a bounded 2:1 service ratio globally, while preserving
+    /// mission priority as an absolute override.
     pub fn select_node(
         &mut self,
         request_lineage: &str,
@@ -122,42 +126,63 @@ impl LineageFairnessScheduler {
             return None;
         }
 
-        // Award credits to all lineages based on their relationship to the request
-        for node in available_nodes {
-            let weight = if node.lineage_id == request_lineage {
-                self.same_lineage_weight
-            } else {
-                self.external_lineage_weight
-            };
-            let credits = self
-                .lineage_credits
-                .entry(node.lineage_id.clone())
-                .or_insert(0.0);
-            *credits += weight;
-        }
-
-        // Select the node with the highest credits
-        let best = available_nodes
+        // 1. Mission priority strictly overrides fairness
+        let max_priority = available_nodes.iter().map(|n| n.priority).max()?;
+        let eligible: Vec<&SimNode> = available_nodes
             .iter()
-            .max_by(|a, b| {
-                let a_credits = self.lineage_credits.get(&a.lineage_id).copied().unwrap_or(0.0);
-                let b_credits = self.lineage_credits.get(&b.lineage_id).copied().unwrap_or(0.0);
-                a_credits
-                    .partial_cmp(&b_credits)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })?;
+            .filter(|n| n.priority == max_priority)
+            .collect();
 
-        // Deduct credits from the selected lineage
-        if let Some(credits) = self.lineage_credits.get_mut(&best.lineage_id) {
-            *credits = 0.0;
-        }
+        // 2. Classify candidates
+        let mut same_candidates: Vec<&SimNode> = eligible
+            .iter()
+            .filter(|n| n.lineage_id == request_lineage)
+            .copied()
+            .collect();
+        let mut ext_candidates: Vec<&SimNode> = eligible
+            .iter()
+            .filter(|n| n.lineage_id != request_lineage)
+            .copied()
+            .collect();
 
-        Some(best.node_id.clone())
+        // 3. Tie-breaker: least recently used (round-robin) among equal classes
+        let sort_candidates = |candidates: &mut Vec<&SimNode>, usage: &HashMap<String, u64>| {
+            candidates.sort_by(|a, b| {
+                let a_usage = usage.get(&a.node_id).copied().unwrap_or(0);
+                let b_usage = usage.get(&b.node_id).copied().unwrap_or(0);
+                a_usage.cmp(&b_usage).then(a.node_id.cmp(&b.node_id))
+            });
+        };
+
+        sort_candidates(&mut same_candidates, &self.node_usage);
+        sort_candidates(&mut ext_candidates, &self.node_usage);
+
+        // 4. Decide based on virtual time
+        let pick_same = if !same_candidates.is_empty() && !ext_candidates.is_empty() {
+            self.same_vtime <= self.ext_vtime
+        } else {
+            !same_candidates.is_empty()
+        };
+
+        // 5. Apply service and update vtime
+        let selected = if pick_same {
+            self.same_vtime += 1.0 / self.same_weight;
+            same_candidates[0]
+        } else {
+            self.ext_vtime += 1.0 / self.ext_weight;
+            ext_candidates[0]
+        };
+
+        *self.node_usage.entry(selected.node_id.clone()).or_insert(0) += 1;
+
+        Some(selected.node_id.clone())
     }
 
     /// Reset all credits.
     pub fn reset(&mut self) {
-        self.lineage_credits.clear();
+        self.same_vtime = 0.0;
+        self.ext_vtime = 0.0;
+        self.node_usage.clear();
     }
 }
 
@@ -199,6 +224,7 @@ pub fn simulate_fairness(
     let mut max_wait = 0u64;
     let mut starvation_events = 0u64;
     let starvation_threshold = 10u64;
+    let mut current_ext_wait = 0u64;
 
     // Simulate scheduling decisions with round-robin lineage requests
     for i in 0..num_decisions {
@@ -215,8 +241,16 @@ pub fn simulate_fairness(
             let same = selected_lineage == request_lineage;
             if same {
                 same_lineage_served += 1;
+                current_ext_wait += 1;
+                if current_ext_wait > max_wait {
+                    max_wait = current_ext_wait;
+                }
+                if current_ext_wait == starvation_threshold {
+                    starvation_events += 1;
+                }
             } else {
                 external_lineage_served += 1;
+                current_ext_wait = 0;
             }
 
             *per_lineage.entry(selected_lineage).or_insert(0) += 1;
@@ -234,7 +268,8 @@ pub fn simulate_fairness(
 
     let target_ratio = 2.0;
     let ratio_deviation = (service_ratio - target_ratio).abs();
-    let passed = ratio_deviation <= 0.5; // within 0.5 of target
+    // Pass strictly requires bounding close to 2.0 and no starvation
+    let passed = ratio_deviation <= 0.2 && external_lineage_served > 0 && starvation_events == 0;
 
     FairnessReport {
         total_decisions: total,
@@ -382,8 +417,8 @@ mod tests {
 
     #[test]
     fn per_lineage_tracking() {
-        let report = simulate_fairness(100, 3, 1);
-        assert_eq!(report.per_lineage.len(), 3);
+        let report = simulate_fairness(100, 4, 1);
+        assert_eq!(report.per_lineage.len(), 4);
         let total: u64 = report.per_lineage.values().sum();
         assert_eq!(total, 100);
     }

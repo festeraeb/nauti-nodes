@@ -313,7 +313,10 @@ mod tests {
 
     #[test]
     fn pull_request_can_handle() {
-        let req = make_request(24000, vec![WorkloadClass::Inference, WorkloadClass::Photogrammetry]);
+        let req = make_request(
+            24000,
+            vec![WorkloadClass::Inference, WorkloadClass::Photogrammetry],
+        );
         assert!(req.can_handle(&WorkloadClass::Inference));
         assert!(req.can_handle(&WorkloadClass::Photogrammetry));
         assert!(!req.can_handle(&WorkloadClass::Lidar));

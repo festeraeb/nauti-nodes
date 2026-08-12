@@ -117,8 +117,7 @@ pub fn score_candidates(
 
             let aging_bonus = aging.aging_bonus(&wu.work_unit_id, policy);
 
-            let mission_priority_bonus =
-                wu.priority as f64 * policy.mission_priority_multiplier;
+            let mission_priority_bonus = wu.priority as f64 * policy.mission_priority_multiplier;
 
             let score = lineage_bonus + aging_bonus + mission_priority_bonus;
 
@@ -142,7 +141,11 @@ pub fn score_candidates(
         .collect();
 
     // Sort by score descending (highest score = best candidate)
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored
 }
 
@@ -233,13 +236,17 @@ pub fn simulate_2to1_policy(
 
         for wu in lineage_wus.iter() {
             let aging_bonus = compute_aging(&wu.work_unit_id);
-            let score = policy.lineage_weight + aging_bonus + (wu.priority as f64 * policy.mission_priority_multiplier);
+            let score = policy.lineage_weight
+                + aging_bonus
+                + (wu.priority as f64 * policy.mission_priority_multiplier);
             all_candidates.push((wu.work_unit_id.clone(), score));
         }
 
         for wu in federation_wus.iter() {
             let aging_bonus = compute_aging(&wu.work_unit_id);
-            let score = policy.federation_weight + aging_bonus + (wu.priority as f64 * policy.mission_priority_multiplier);
+            let score = policy.federation_weight
+                + aging_bonus
+                + (wu.priority as f64 * policy.mission_priority_multiplier);
             all_candidates.push((wu.work_unit_id.clone(), score));
         }
 
@@ -250,7 +257,10 @@ pub fn simulate_2to1_policy(
             if winner_id.starts_with("lineage-") {
                 lineage_scheduled += 1;
                 // Winner gets fresh aging (just completed); losers keep aging
-                if let Some(pos) = lineage_wus.iter().position(|w| &w.work_unit_id == winner_id) {
+                if let Some(pos) = lineage_wus
+                    .iter()
+                    .position(|w| &w.work_unit_id == winner_id)
+                {
                     queued_at.remove(winner_id);
                     lineage_wus.remove(pos);
                     let wu = WorkUnit::new(
@@ -268,7 +278,10 @@ pub fn simulate_2to1_policy(
             } else {
                 federation_scheduled += 1;
                 // Federation winner gets fresh aging; lineage jobs keep aging
-                if let Some(pos) = federation_wus.iter().position(|w| &w.work_unit_id == winner_id) {
+                if let Some(pos) = federation_wus
+                    .iter()
+                    .position(|w| &w.work_unit_id == winner_id)
+                {
                     queued_at.remove(winner_id);
                     federation_wus.remove(pos);
                     let wu = WorkUnit::new(
@@ -341,9 +354,11 @@ mod tests {
         let mut aging = AgingTracker::new();
 
         // Federation job has been waiting longer
-        aging.queued_at
+        aging
+            .queued_at
             .insert("federation-1".into(), crate::types::now_ms() - 10_000); // 10 seconds ago
-        aging.queued_at
+        aging
+            .queued_at
             .insert("lineage-1".into(), crate::types::now_ms()); // just now
 
         let lineage_wu = WorkUnit::new(

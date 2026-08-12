@@ -2,6 +2,7 @@ use crate::adapter::llama::ChatMessage;
 use crate::fleet;
 use crate::job_runner;
 use crate::jobs::JobRecord;
+use crate::node::auth::{SignedHeartbeat, SignedJoinRequest};
 use crate::state::AppState;
 use crate::types::{NodeMetadata, NodeStatistics};
 use axum::{
@@ -73,24 +74,7 @@ fn extract_api_key(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-#[derive(Debug, Deserialize)]
-pub struct WorkerRegisterRequest {
-    pub id: String,
-    pub inference_url: String,
-    pub role: String,
-    pub gpu_name: String,
-    pub vram_mb: u32,
-    #[serde(default)]
-    pub models: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WorkerHeartbeatRequest {
-    pub node_id: String,
-    pub active_jobs: u32,
-    pub free_vram_mb: u32,
-    pub tokens_per_sec: f64,
-}
+// Removed WorkerRegisterRequest and WorkerHeartbeatRequest in favor of Signed equivalents
 
 pub async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
@@ -301,17 +285,21 @@ pub async fn landing_page() -> Html<&'static str> {
 
 pub async fn worker_register(
     State(state): State<AppState>,
-    Json(req): Json<WorkerRegisterRequest>,
-) -> Json<serde_json::Value> {
+    Json(req): Json<SignedJoinRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    req.verify(&state.nonce_tracker)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    state.nonce_tracker.mark_used(req.nonce.clone());
+
     let role = req.role.clone();
     let meta = NodeMetadata {
-        id: req.id.clone(),
+        id: req.node_id.clone(),
         addr: req.inference_url.clone(),
         inference_url: req.inference_url,
         role: role.clone(),
         gpu_name: req.gpu_name,
         online: true,
-        public_key: vec![],
+        public_key: hex::decode(&req.public_key_hex).unwrap_or_default(),
         capabilities: crate::types::NodeCapabilities {
             max_batch: 1,
             models: if req.models.is_empty() {
@@ -323,8 +311,8 @@ pub async fn worker_register(
             role,
         },
     };
-    if state.registry.get_node(&req.id).is_some() {
-        if let Some(rt) = state.registry.get_node(&req.id) {
+    if state.registry.get_node(&req.node_id).is_some() {
+        if let Some(rt) = state.registry.get_node(&req.node_id) {
             if let Ok(mut md) = rt.metadata.write() {
                 *md = meta;
             }
@@ -332,25 +320,51 @@ pub async fn worker_register(
     } else {
         state.registry.register_node(meta);
     }
-    Json(serde_json::json!({ "registered": req.id }))
+    Ok(Json(serde_json::json!({ "registered": req.node_id })))
 }
 
 pub async fn worker_heartbeat(
     State(state): State<AppState>,
-    Json(req): Json<WorkerHeartbeatRequest>,
-) -> Json<serde_json::Value> {
-    if let Some(rt) = state.registry.get_node(&req.node_id) {
-        rt.touch_heartbeat(NodeStatistics {
-            active_jobs: req.active_jobs,
-            free_vram_mb: req.free_vram_mb,
-            tokens_per_sec: req.tokens_per_sec,
-            ..Default::default()
-        });
-        if let Ok(mut md) = rt.metadata.write() {
-            md.online = true;
-        }
+    Json(req): Json<SignedHeartbeat>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let rt = state
+        .registry
+        .get_node(&req.node_id)
+        .ok_or((StatusCode::NOT_FOUND, "node not found".into()))?;
+    let pub_key_hex = {
+        let md = rt
+            .metadata
+            .read()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        hex::encode(&md.public_key)
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if now.abs_diff(req.timestamp_secs) > 300 {
+        return Err((StatusCode::UNAUTHORIZED, "stale request".into()));
     }
-    Json(serde_json::json!({ "ok": true }))
+    if state.nonce_tracker.is_used(&req.nonce) {
+        return Err((StatusCode::UNAUTHORIZED, "replayed nonce".into()));
+    }
+
+    crate::node::auth::verify_signature(&pub_key_hex, &req.canonical_message(), &req.signature_hex)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+
+    state.nonce_tracker.mark_used(req.nonce.clone());
+
+    rt.touch_heartbeat(NodeStatistics {
+        active_jobs: req.active_jobs,
+        free_vram_mb: req.free_vram_mb,
+        tokens_per_sec: req.tokens_per_sec,
+        ..Default::default()
+    });
+    if let Ok(mut md) = rt.metadata.write() {
+        md.online = true;
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 pub async fn sync_fleet_now(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -411,7 +425,9 @@ pub async fn node_join(
     })))
 }
 
-pub async fn tree_snapshot(State(state): State<AppState>) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+pub async fn tree_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let lineage = state.lineage.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "lineage not initialized".to_string(),
@@ -450,13 +466,15 @@ use tracing::info;
 
 pub async fn prometheus_metrics(State(state): State<AppState>) -> String {
     let m = &state.metrics;
-    m.federation_nodes_total.store(state.registry.list_nodes().len() as u64, Ordering::Relaxed);
+    m.federation_nodes_total
+        .store(state.registry.list_nodes().len() as u64, Ordering::Relaxed);
     m.render_prometheus()
 }
 
 pub async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
     let m = &state.metrics;
-    m.federation_nodes_total.store(state.registry.list_nodes().len() as u64, Ordering::Relaxed);
+    m.federation_nodes_total
+        .store(state.registry.list_nodes().len() as u64, Ordering::Relaxed);
     let mut json = m.snapshot_json();
     json["active_jobs"] = serde_json::json!(state.jobs.active_count());
     Json(json)

@@ -157,8 +157,14 @@ mod tests {
 
     #[test]
     fn inference_url_for_http_prefix() {
-        assert_eq!(inference_url_for("http://10.0.0.1:5200", 0), "http://10.0.0.1:5200");
-        assert_eq!(inference_url_for("https://example.com:443", 0), "https://example.com:443");
+        assert_eq!(
+            inference_url_for("http://10.0.0.1:5200", 0),
+            "http://10.0.0.1:5200"
+        );
+        assert_eq!(
+            inference_url_for("https://example.com:443", 0),
+            "https://example.com:443"
+        );
     }
 
     #[test]
@@ -174,6 +180,10 @@ mod tests {
             .unwrap();
         // Forge at an unreachable address returns empty, not fake nodes
         let nodes = fetch_fleet_from_forge(&client, "http://127.0.0.1:1").await;
-        assert!(nodes.is_empty(), "unreachable Forge must return empty fleet, got {} nodes", nodes.len());
+        assert!(
+            nodes.is_empty(),
+            "unreachable Forge must return empty fleet, got {} nodes",
+            nodes.len()
+        );
     }
 }

@@ -1,3 +1,3 @@
 pub mod unit;
 
-pub use unit::{WorkUnit, WorkUnitState, ValidationPolicy, CheckpointPolicy};
+pub use unit::{CheckpointPolicy, ValidationPolicy, WorkUnit, WorkUnitState};

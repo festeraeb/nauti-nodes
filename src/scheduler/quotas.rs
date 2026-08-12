@@ -8,7 +8,12 @@ pub struct QuotaStore {
 
 impl QuotaStore {
     pub fn open(db_url: &str) -> Result<Self> {
-        let conn = Connection::open(db_url)?;
+        let conn = if db_url == ":memory:" || db_url == "sqlite::memory:" {
+            Connection::open_in_memory()?
+        } else {
+            let path = db_url.strip_prefix("sqlite:").unwrap_or(db_url);
+            Connection::open(path)?
+        };
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS api_quotas (
                 api_key TEXT PRIMARY KEY,

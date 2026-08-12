@@ -15,9 +15,9 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
         .ok();
 
     // Load or create durable node identity
-    let identity = crate::node::identity::NodeIdentity::load_or_create(
-        std::path::Path::new(&config.identity_path),
-    )?;
+    let identity = crate::node::identity::NodeIdentity::load_or_create(std::path::Path::new(
+        &config.identity_path,
+    ))?;
     info!(node_id = %identity.node_id, "node identity established");
 
     // Initialize lineage store and register self as root

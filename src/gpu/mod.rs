@@ -122,7 +122,14 @@ struct AllSmiGpuDetail {
 pub fn discover_gpus() -> Vec<GpuInfo> {
     // Try all-smi snapshot first
     match std::process::Command::new("all-smi")
-        .args(["snapshot", "--format", "json", "--pretty=false", "--include", "gpu"])
+        .args([
+            "snapshot",
+            "--format",
+            "json",
+            "--pretty=false",
+            "--include",
+            "gpu",
+        ])
         .output()
     {
         Ok(output) if output.status.success() => {
@@ -152,7 +159,10 @@ pub fn discover_gpus() -> Vec<GpuInfo> {
     // Fallback: try nvidia-smi (NVIDIA only)
     match discover_gpus_nvidia_smi() {
         gpus if !gpus.is_empty() => {
-            info!(count = gpus.len(), "discovered GPUs via nvidia-smi fallback");
+            info!(
+                count = gpus.len(),
+                "discovered GPUs via nvidia-smi fallback"
+            );
             gpus
         }
         _ => {
@@ -185,23 +195,19 @@ fn parse_all_smi_snapshot(json: &str) -> Result<Vec<GpuInfo>, String> {
         let (vendor, arch, driver, compute) = match &gpu.detail {
             Some(d) => (
                 d.brand.clone().unwrap_or_else(|| "unknown".to_string()),
-                d.architecture.clone().unwrap_or_else(|| "unknown".to_string()),
+                d.architecture
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
                 d.driver_version.clone(),
                 d.cuda_version.clone(),
             ),
-            None => (
-                "unknown".to_string(),
-                "unknown".to_string(),
-                None,
-                None,
-            ),
+            None => ("unknown".to_string(), "unknown".to_string(), None, None),
         };
 
-        let power_limit = gpu.detail.as_ref().and_then(|d| {
-            d.power_limit
-                .as_ref()
-                .and_then(|s| s.parse::<f64>().ok())
-        });
+        let power_limit = gpu
+            .detail
+            .as_ref()
+            .and_then(|d| d.power_limit.as_ref().and_then(|s| s.parse::<f64>().ok()));
 
         result.push(GpuInfo {
             name,

@@ -9,7 +9,9 @@
 //! - Supports streaming and cancellation
 
 use crate::capabilities::RuntimeClass;
-use crate::runtime::{ChatMessage, InferenceResponse, InferenceStream, ModelRuntime, RuntimeHealth, RuntimeProbe};
+use crate::runtime::{
+    ChatMessage, InferenceResponse, InferenceStream, ModelRuntime, RuntimeHealth, RuntimeProbe,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -287,9 +289,6 @@ mod tests {
     fn nim_url_building() {
         let runtime = NimRuntime::new(NimConfig::default());
         assert_eq!(runtime.url("/health"), "http://127.0.0.1:8000/health");
-        assert_eq!(
-            runtime.url("/v1/models"),
-            "http://127.0.0.1:8000/v1/models"
-        );
+        assert_eq!(runtime.url("/v1/models"), "http://127.0.0.1:8000/v1/models");
     }
 }

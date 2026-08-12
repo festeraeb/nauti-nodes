@@ -94,8 +94,7 @@ impl LineageStore {
         } else {
             // Strip "sqlite:" prefix if present
             let path = db_url.strip_prefix("sqlite:").unwrap_or(db_url);
-            Connection::open(path)
-                .map_err(|e| Error::Internal(format!("open db {path}: {e}")))?
+            Connection::open(path).map_err(|e| Error::Internal(format!("open db {path}: {e}")))?
         };
         Self::new(conn)
     }
@@ -131,11 +130,7 @@ impl LineageStore {
 
     /// Register a new node under a parent. Returns the new relationship.
     /// Prevents cycles, self-parenting, and duplicate identity.
-    pub fn add_child(
-        &self,
-        child_id: &str,
-        parent_id: &str,
-    ) -> Result<NodeRelationship> {
+    pub fn add_child(&self, child_id: &str, parent_id: &str) -> Result<NodeRelationship> {
         // Validate: no self-parenting
         if child_id == parent_id {
             return Err(Error::Internal("cannot parent a node to itself".into()));
@@ -293,7 +288,11 @@ impl LineageStore {
         self.get_relationship_locked(&conn, node_id)
     }
 
-    fn get_relationship_locked(&self, conn: &Connection, node_id: &str) -> Result<Option<NodeRelationship>> {
+    fn get_relationship_locked(
+        &self,
+        conn: &Connection,
+        node_id: &str,
+    ) -> Result<Option<NodeRelationship>> {
         let mut stmt = conn
             .prepare(
                 "SELECT node_id, parent_node_id, root_node_id, branch_id, depth, status, created_at_ms, updated_at_ms
@@ -388,7 +387,12 @@ impl LineageStore {
         self.is_ancestor_of_locked(&conn, potential_ancestor, node_id)
     }
 
-    fn is_ancestor_of_locked(&self, conn: &Connection, potential_ancestor: &str, node_id: &str) -> Result<bool> {
+    fn is_ancestor_of_locked(
+        &self,
+        conn: &Connection,
+        potential_ancestor: &str,
+        node_id: &str,
+    ) -> Result<bool> {
         let mut current = node_id.to_string();
         loop {
             let parent: Option<String> = conn
@@ -649,7 +653,7 @@ mod tests {
         store.set_root("root").unwrap();
         store.add_child("a", "root").unwrap();
         store.reparent("a", "root").unwrap(); // re-parent under same parent (still tests supersede logic)
-        // The old relationship should be superseded
+                                              // The old relationship should be superseded
         let conn = store.conn.lock().unwrap();
         let count: i64 = conn
             .query_row(

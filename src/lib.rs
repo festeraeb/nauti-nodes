@@ -3,8 +3,8 @@
 pub mod adapter;
 pub mod api;
 pub mod capabilities;
-pub mod contribution;
 pub mod config;
+pub mod contribution;
 pub mod coordinator;
 pub mod fleet;
 pub mod gpu;

@@ -330,7 +330,15 @@ mod tests {
 
     #[test]
     fn new_work_unit_is_available() {
-        let wu = WorkUnit::new("wu-1", "m-1", WorkloadType::Inference, 0, PrivacyClass::Public, 4096, 30);
+        let wu = WorkUnit::new(
+            "wu-1",
+            "m-1",
+            WorkloadType::Inference,
+            0,
+            PrivacyClass::Public,
+            4096,
+            30,
+        );
         assert_eq!(wu.state, WorkUnitState::Available);
         assert!(wu.leased_to.is_none());
     }
@@ -344,7 +352,15 @@ mod tests {
 
     #[test]
     fn lease_and_complete() {
-        let mut wu = WorkUnit::new("wu-1", "m-1", WorkloadType::Inference, 0, PrivacyClass::Public, 4096, 30);
+        let mut wu = WorkUnit::new(
+            "wu-1",
+            "m-1",
+            WorkloadType::Inference,
+            0,
+            PrivacyClass::Public,
+            4096,
+            30,
+        );
         wu.lease("node-A", 60_000);
         assert_eq!(wu.state, WorkUnitState::Leased);
         assert_eq!(wu.leased_to, Some("node-A".into()));
@@ -357,7 +373,15 @@ mod tests {
 
     #[test]
     fn fail_and_retry() {
-        let mut wu = WorkUnit::new("wu-1", "m-1", WorkloadType::Inference, 0, PrivacyClass::Public, 4096, 30);
+        let mut wu = WorkUnit::new(
+            "wu-1",
+            "m-1",
+            WorkloadType::Inference,
+            0,
+            PrivacyClass::Public,
+            4096,
+            30,
+        );
         wu.fail();
         assert_eq!(wu.state, WorkUnitState::Failed);
         assert_eq!(wu.retry_count, 1);
@@ -367,32 +391,63 @@ mod tests {
 
     #[test]
     fn max_retries() {
-        let mut wu = WorkUnit::new("wu-1", "m-1", WorkloadType::Inference, 0, PrivacyClass::Public, 4096, 30);
+        let mut wu = WorkUnit::new(
+            "wu-1",
+            "m-1",
+            WorkloadType::Inference,
+            0,
+            PrivacyClass::Public,
+            4096,
+            30,
+        );
         wu.max_retries = 2;
-        wu.fail(); wu.retry();
-        wu.fail(); wu.retry();
+        wu.fail();
+        wu.retry();
+        wu.fail();
+        wu.retry();
         wu.fail();
         assert!(!wu.retry()); // exhausted
     }
 
     #[test]
     fn eligibility() {
-        let wu = WorkUnit::new("wu-1", "m-1", WorkloadType::Inference, 0, PrivacyClass::Public, 4096, 30);
+        let wu = WorkUnit::new(
+            "wu-1",
+            "m-1",
+            WorkloadType::Inference,
+            0,
+            PrivacyClass::Public,
+            4096,
+            30,
+        );
         assert!(wu.eligible_for(8192, &PrivacyClass::Public, &[WorkloadType::Inference]));
         assert!(!wu.eligible_for(2048, &PrivacyClass::Public, &[WorkloadType::Inference])); // not enough VRAM
-        assert!(!wu.eligible_for(8192, &PrivacyClass::Public, &[WorkloadType::Photogrammetry])); // wrong workload
+        assert!(!wu.eligible_for(8192, &PrivacyClass::Public, &[WorkloadType::Photogrammetry]));
+        // wrong workload
     }
 
     #[test]
     fn privacy_eligibility() {
-        let wu = WorkUnit::new("wu-1", "m-1", WorkloadType::Inference, 0, PrivacyClass::LocalOnly, 4096, 30);
+        let wu = WorkUnit::new(
+            "wu-1",
+            "m-1",
+            WorkloadType::Inference,
+            0,
+            PrivacyClass::LocalOnly,
+            4096,
+            30,
+        );
         assert!(wu.eligible_for(8192, &PrivacyClass::LocalOnly, &[WorkloadType::Inference]));
         assert!(!wu.eligible_for(8192, &PrivacyClass::Public, &[WorkloadType::Inference]));
     }
 
     #[test]
     fn workload_type_roundtrip() {
-        for wt in [WorkloadType::Inference, WorkloadType::Photogrammetry, WorkloadType::Other] {
+        for wt in [
+            WorkloadType::Inference,
+            WorkloadType::Photogrammetry,
+            WorkloadType::Other,
+        ] {
             assert_eq!(WorkloadType::from_str(wt.as_str()), wt);
         }
     }

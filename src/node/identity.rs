@@ -55,8 +55,9 @@ impl NodeIdentity {
             let data = serde_json::to_string_pretty(&identity)
                 .map_err(|e| crate::types::Error::Internal(format!("serialize identity: {e}")))?;
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| crate::types::Error::Internal(format!("create identity dir: {e}")))?;
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    crate::types::Error::Internal(format!("create identity dir: {e}"))
+                })?;
             }
             std::fs::write(path, &data)
                 .map_err(|e| crate::types::Error::Internal(format!("write identity: {e}")))?;
