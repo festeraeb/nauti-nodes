@@ -149,7 +149,36 @@ mod tests {
                 vram_mb: 8192,
                 role: "coder".into(),
             },
-            ..Default::default()
+            claim: crate::types::RegisteredHardwareClaim {
+                gpu_name: "test".into(),
+                vram_mb: 8192,
+                models: vec![],
+            },
+            observed: Some(crate::types::ObservedHardware {
+                gpu_name: "test".into(),
+                vram_mb: 8192,
+                vendor: "NVIDIA".into(),
+                device_count: 1,
+                driver_version: None,
+                temperature_c: None,
+                node_id: id.into(),
+                observer_node_id: "local".into(),
+                source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
+                provider: "all-smi".into(),
+                observed_at: Some(crate::types::now_ms()),
+                received_at: Some(crate::types::now_ms()),
+                measurement_id: None,
+                device_id: None,
+                sequence: None,
+                age_ms: None,
+                source_endpoint: None,
+            }),
+            reconciliation: crate::types::ReconciledHardwareState {
+                status: crate::types::ReconciliationStatus::MATCH,
+                fields: vec![],
+            },
+            last_hardware_probe: Some(crate::types::now_ms()),
+            health_state: "ONLINE".to_string(),
         }
     }
 

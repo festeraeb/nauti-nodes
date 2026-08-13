@@ -92,6 +92,12 @@ pub async fn list_nodes(State(state): State<AppState>) -> Json<serde_json::Value
         .filter_map(|rt| {
             let md = rt.metadata.read().ok()?;
             let stats = rt.stats.read().ok()?;
+            let src_type = md
+                .observed
+                .as_ref()
+                .map(|o| format!("{:?}", o.source_type))
+                .unwrap_or_else(|| "UNKNOWN_PROVENANCE".to_string());
+            let obs_at = md.observed.as_ref().and_then(|o| o.observed_at);
             Some(serde_json::json!({
                 "id": md.id,
                 "role": md.role,
@@ -102,6 +108,9 @@ pub async fn list_nodes(State(state): State<AppState>) -> Json<serde_json::Value
                 "vram_mb": md.capabilities.vram_mb,
                 "active_jobs": stats.active_jobs,
                 "tokens_per_sec": stats.tokens_per_sec,
+                "reconciliation_status": format!("{:?}", md.reconciliation.status),
+                "telemetry_source": src_type,
+                "observed_at": obs_at,
             }))
         })
         .collect();
@@ -294,21 +303,70 @@ pub async fn fetch_observed_hardware(
             if let Ok(body) = resp.json::<serde_json::Value>().await {
                 if let Some(gpus) = body.get("gpus").and_then(|g| g.as_array()) {
                     for gpu in gpus {
-                        let worker_name = gpu.get("worker_name").and_then(|v| v.as_str()).unwrap_or("");
+                        let worker_name = gpu
+                            .get("worker_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let node = gpu.get("node").and_then(|v| v.as_str()).unwrap_or("");
-                        if worker_name == node_id || node == node_id || node_id.contains(worker_name) || node_id.contains(node) {
-                            let gpu_name = gpu.get("name").and_then(|v| v.as_str()).unwrap_or("UNKNOWN").to_string();
-                            let vram_mb = gpu.get("vram_mb").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let backend = gpu.get("backend").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                            let temp_c = gpu.get("temperature_c").and_then(|v| v.as_f64()).map(|t| t as u32);
+                        if worker_name == node_id
+                            || node == node_id
+                            || node_id.contains(worker_name)
+                            || node_id.contains(node)
+                        {
+                            let gpu_name = gpu
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("UNKNOWN")
+                                .to_string();
+                            let vram_mb =
+                                gpu.get("vram_mb").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let backend = gpu
+                                .get("backend")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let temp_c = gpu
+                                .get("temperature_c")
+                                .and_then(|v| v.as_f64())
+                                .map(|t| t as u32);
+                            let src_type_str = gpu
+                                .get("source_type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("UNKNOWN_PROVENANCE");
+                            let source_type = serde_json::from_value(serde_json::json!(
+                                src_type_str
+                            ))
+                            .unwrap_or(crate::types::TelemetrySourceType::UnknownProvenance);
+                            let observer = gpu
+                                .get("observer_node_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("forge")
+                                .to_string();
+                            let provider = gpu
+                                .get("provider")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let obs_at = gpu.get("observed_at").and_then(|v| v.as_u64());
+
                             return Some(crate::types::ObservedHardware {
                                 gpu_name,
                                 vram_mb,
                                 vendor: backend,
                                 device_count: 1,
-                                observed_at: crate::types::now_ms(),
                                 driver_version: None,
                                 temperature_c: temp_c,
+                                node_id: node_id.to_string(),
+                                observer_node_id: observer,
+                                source_type,
+                                provider,
+                                observed_at: obs_at,
+                                received_at: Some(crate::types::now_ms()),
+                                measurement_id: None,
+                                device_id: None,
+                                sequence: None,
+                                age_ms: None,
+                                source_endpoint: None,
                             });
                         }
                     }
@@ -319,15 +377,28 @@ pub async fn fetch_observed_hardware(
     let local_gpus = crate::gpu::discover_gpus();
     if !local_gpus.is_empty() {
         if node_id == "cognitive-worker" {
-            if let Some(gpu) = local_gpus.iter().find(|g| g.name.contains("2060") || g.name.contains("RTX")) {
+            if let Some(gpu) = local_gpus
+                .iter()
+                .find(|g| g.name.contains("2060") || g.name.contains("RTX"))
+            {
                 return Some(crate::types::ObservedHardware {
                     gpu_name: gpu.name.clone(),
                     vram_mb: gpu.total_memory_mb,
                     vendor: gpu.vendor.clone(),
                     device_count: local_gpus.len() as u32,
-                    observed_at: crate::types::now_ms(),
                     driver_version: gpu.driver_version.clone(),
                     temperature_c: gpu.temperature_c.map(|t| t as u32),
+                    node_id: node_id.to_string(),
+                    observer_node_id: "local".to_string(),
+                    source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
+                    provider: "all-smi".to_string(),
+                    observed_at: Some(crate::types::now_ms()),
+                    received_at: Some(crate::types::now_ms()),
+                    measurement_id: None,
+                    device_id: None,
+                    sequence: None,
+                    age_ms: None,
+                    source_endpoint: None,
                 });
             }
             if let Some(gpu) = local_gpus.first() {
@@ -336,9 +407,19 @@ pub async fn fetch_observed_hardware(
                     vram_mb: gpu.total_memory_mb,
                     vendor: gpu.vendor.clone(),
                     device_count: local_gpus.len() as u32,
-                    observed_at: crate::types::now_ms(),
                     driver_version: gpu.driver_version.clone(),
                     temperature_c: gpu.temperature_c.map(|t| t as u32),
+                    node_id: node_id.to_string(),
+                    observer_node_id: "local".to_string(),
+                    source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
+                    provider: "all-smi".to_string(),
+                    observed_at: Some(crate::types::now_ms()),
+                    received_at: Some(crate::types::now_ms()),
+                    measurement_id: None,
+                    device_id: None,
+                    sequence: None,
+                    age_ms: None,
+                    source_endpoint: None,
                 });
             }
         }
@@ -460,7 +541,10 @@ pub async fn worker_heartbeat(
 
     let needs_reconcile = {
         if let Ok(md) = rt.metadata.read() {
-            let elapsed = md.last_hardware_probe.map(|t| crate::types::now_ms().saturating_sub(t)).unwrap_or(u64::MAX);
+            let elapsed = md
+                .last_hardware_probe
+                .map(|t| crate::types::now_ms().saturating_sub(t))
+                .unwrap_or(u64::MAX);
             elapsed > 10000
         } else {
             false
@@ -468,7 +552,8 @@ pub async fn worker_heartbeat(
     };
 
     if needs_reconcile {
-        let observed = fetch_observed_hardware(&state.http, &state.config.forge_url, &req.node_id).await;
+        let observed =
+            fetch_observed_hardware(&state.http, &state.config.forge_url, &req.node_id).await;
         if let Ok(mut md) = rt.metadata.write() {
             md.online = true;
             md.health_state = "ONLINE".to_string();
@@ -494,9 +579,7 @@ pub struct AdminReconciliationResponse {
     pub reconciliation: serde_json::Value,
 }
 
-pub async fn admin_reconciliation(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn admin_reconciliation(State(state): State<AppState>) -> impl IntoResponse {
     let nodes = state.registry.list_nodes();
     let mut out = Vec::new();
     for rt in nodes {
@@ -505,7 +588,11 @@ pub async fn admin_reconciliation(
                 serde_json::json!({
                     "gpu": obs.gpu_name,
                     "vram_mb": obs.vram_mb,
-                    "observed_at": obs.observed_at
+                    "observed_at": obs.observed_at,
+                    "source_type": format!("{:?}", obs.source_type),
+                    "observer_node_id": obs.observer_node_id,
+                    "provider": obs.provider,
+                    "received_at": obs.received_at,
                 })
             } else {
                 serde_json::Value::Null

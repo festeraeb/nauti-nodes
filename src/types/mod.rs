@@ -45,15 +45,47 @@ impl Default for RegisteredHardwareClaim {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TelemetrySourceType {
+    ConfiguredStatic,
+    RegisteredClaim,
+    PersistedCachedObservation,
+    RemoteLiveObservation,
+    LocalLiveObservation,
+    DerivedFromLiveObservation,
+    UnknownProvenance,
+}
+
+impl Default for TelemetrySourceType {
+    fn default() -> Self {
+        Self::UnknownProvenance
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ObservedHardware {
     pub gpu_name: String,
     pub vram_mb: u32,
     pub vendor: String,
     pub device_count: u32,
-    pub observed_at: u64,
     pub driver_version: Option<String>,
     pub temperature_c: Option<u32>,
+
+    // Provenance Metadata
+    pub node_id: String,
+    pub observer_node_id: String,
+    pub source_type: TelemetrySourceType,
+    pub provider: String,
+    pub observed_at: Option<u64>,
+    pub received_at: Option<u64>,
+
+    // Optional attributes
+    pub measurement_id: Option<String>,
+    pub device_id: Option<String>,
+    pub sequence: Option<u64>,
+    pub age_ms: Option<u64>,
+    pub source_endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,15 +119,23 @@ impl Default for ReconciledHardwareState {
     }
 }
 
-pub fn reconcile_claim(claim: &RegisteredHardwareClaim, observed: &Option<ObservedHardware>) -> ReconciledHardwareState {
+pub fn reconcile_claim(
+    claim: &RegisteredHardwareClaim,
+    observed: &Option<ObservedHardware>,
+) -> ReconciledHardwareState {
     if let Some(obs) = observed {
         let mut fields = Vec::new();
         let c_gpu = claim.gpu_name.to_lowercase();
         let o_gpu = obs.gpu_name.to_lowercase();
-        
+
         if c_gpu != o_gpu {
             fields.push("model mismatch".to_string());
-            let c_vendor = if c_gpu.contains("nvidia") || c_gpu.contains("rtx") || c_gpu.contains("gtx") || c_gpu.contains("tesla") || c_gpu.contains("quadro") {
+            let c_vendor = if c_gpu.contains("nvidia")
+                || c_gpu.contains("rtx")
+                || c_gpu.contains("gtx")
+                || c_gpu.contains("tesla")
+                || c_gpu.contains("quadro")
+            {
                 "nvidia"
             } else if c_gpu.contains("amd") || c_gpu.contains("radeon") {
                 "amd"
@@ -109,11 +149,11 @@ pub fn reconcile_claim(claim: &RegisteredHardwareClaim, observed: &Option<Observ
                 fields.push("vendor mismatch".to_string());
             }
         }
-        
+
         if claim.vram_mb != obs.vram_mb {
             fields.push("VRAM mismatch".to_string());
         }
-        
+
         if obs.device_count == 0 {
             fields.push("device-count mismatch".to_string());
         }
@@ -123,7 +163,7 @@ pub fn reconcile_claim(claim: &RegisteredHardwareClaim, observed: &Option<Observ
         } else {
             ReconciliationStatus::MISMATCH
         };
-        
+
         ReconciledHardwareState { status, fields }
     } else {
         ReconciledHardwareState {
@@ -255,11 +295,21 @@ mod reconciliation_tests {
             vram_mb: 16384,
             vendor: "NVIDIA".to_string(),
             device_count: 1,
-            observed_at: now_ms(),
             driver_version: None,
             temperature_c: None,
+            node_id: "test-node".to_string(),
+            observer_node_id: "coordinator".to_string(),
+            source_type: TelemetrySourceType::LocalLiveObservation,
+            provider: "all-smi".to_string(),
+            observed_at: Some(now_ms()),
+            received_at: Some(now_ms()),
+            measurement_id: None,
+            device_id: None,
+            sequence: None,
+            age_ms: None,
+            source_endpoint: None,
         });
-        
+
         let state = reconcile_claim(&claim, &observed);
         assert_eq!(state.status, ReconciliationStatus::MATCH);
         assert!(state.fields.is_empty());
@@ -277,11 +327,21 @@ mod reconciliation_tests {
             vram_mb: 8192,
             vendor: "NVIDIA".to_string(),
             device_count: 1,
-            observed_at: now_ms(),
             driver_version: None,
             temperature_c: None,
+            node_id: "test-node".to_string(),
+            observer_node_id: "coordinator".to_string(),
+            source_type: TelemetrySourceType::LocalLiveObservation,
+            provider: "all-smi".to_string(),
+            observed_at: Some(now_ms()),
+            received_at: Some(now_ms()),
+            measurement_id: None,
+            device_id: None,
+            sequence: None,
+            age_ms: None,
+            source_endpoint: None,
         });
-        
+
         let state = reconcile_claim(&claim, &observed);
         assert_eq!(state.status, ReconciliationStatus::MISMATCH);
         assert!(state.fields.contains(&"VRAM mismatch".to_string()));
@@ -299,11 +359,21 @@ mod reconciliation_tests {
             vram_mb: 8192,
             vendor: "NVIDIA".to_string(),
             device_count: 1,
-            observed_at: now_ms(),
             driver_version: None,
             temperature_c: None,
+            node_id: "test-node".to_string(),
+            observer_node_id: "coordinator".to_string(),
+            source_type: TelemetrySourceType::LocalLiveObservation,
+            provider: "all-smi".to_string(),
+            observed_at: Some(now_ms()),
+            received_at: Some(now_ms()),
+            measurement_id: None,
+            device_id: None,
+            sequence: None,
+            age_ms: None,
+            source_endpoint: None,
         });
-        
+
         let state = reconcile_claim(&claim, &observed);
         assert_eq!(state.status, ReconciliationStatus::MISMATCH);
         assert!(state.fields.contains(&"model mismatch".to_string()));
@@ -321,11 +391,21 @@ mod reconciliation_tests {
             vram_mb: 8192,
             vendor: "NVIDIA".to_string(),
             device_count: 1,
-            observed_at: now_ms(),
             driver_version: None,
             temperature_c: None,
+            node_id: "test-node".to_string(),
+            observer_node_id: "coordinator".to_string(),
+            source_type: TelemetrySourceType::LocalLiveObservation,
+            provider: "all-smi".to_string(),
+            observed_at: Some(now_ms()),
+            received_at: Some(now_ms()),
+            measurement_id: None,
+            device_id: None,
+            sequence: None,
+            age_ms: None,
+            source_endpoint: None,
         });
-        
+
         let state = reconcile_claim(&claim, &observed);
         assert_eq!(state.status, ReconciliationStatus::MISMATCH);
         assert!(state.fields.contains(&"model mismatch".to_string()));

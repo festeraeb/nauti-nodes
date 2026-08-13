@@ -52,7 +52,36 @@ pub fn fleet_node(id: &str, url: &str, role: &str, gpu: &str, vram: u32) -> Node
             vram_mb: vram,
             role: role.to_string(),
         },
-        ..Default::default()
+        claim: crate::types::RegisteredHardwareClaim {
+            gpu_name: gpu.to_string(),
+            vram_mb: vram,
+            models: vec![],
+        },
+        observed: Some(crate::types::ObservedHardware {
+            gpu_name: gpu.to_string(),
+            vram_mb: vram,
+            vendor: "NVIDIA".to_string(),
+            device_count: 1,
+            driver_version: None,
+            temperature_c: None,
+            node_id: id.to_string(),
+            observer_node_id: "local".to_string(),
+            source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
+            provider: "all-smi".to_string(),
+            observed_at: Some(crate::types::now_ms()),
+            received_at: Some(crate::types::now_ms()),
+            measurement_id: None,
+            device_id: None,
+            sequence: None,
+            age_ms: None,
+            source_endpoint: None,
+        }),
+        reconciliation: crate::types::ReconciledHardwareState {
+            status: crate::types::ReconciliationStatus::MATCH,
+            fields: vec![],
+        },
+        last_hardware_probe: Some(crate::types::now_ms()),
+        health_state: "ONLINE".to_string(),
     }
 }
 
