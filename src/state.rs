@@ -7,6 +7,7 @@ use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::scheduler::Scheduler;
 use crate::node::revocation::RevocationStore;
+use crate::runtime::ModelManager;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct AppState {
     pub metrics: FederationMetrics,
     pub nonce_tracker: Arc<NonceTracker>,
     pub revocations: Arc<RevocationStore>,
+    pub model_manager: Arc<ModelManager>,
 }
 
 impl AppState {
@@ -28,6 +30,7 @@ impl AppState {
         let registry = Arc::new(NodeRegistry::new());
         let scheduler = Arc::new(Scheduler::new(registry.clone(), &config.db_url)?);
         let revocations = Arc::new(RevocationStore::open(&config.db_url)?);
+        let model_manager = Arc::new(ModelManager::new());
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
@@ -43,6 +46,7 @@ impl AppState {
             metrics: FederationMetrics::new(),
             nonce_tracker: Arc::new(NonceTracker::new()),
             revocations,
+            model_manager,
         })
     }
 }

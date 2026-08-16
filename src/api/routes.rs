@@ -38,6 +38,9 @@ pub fn router(state: AppState) -> Router {
         .route("/internal/quotas/set", post(handlers::set_quota_balance))
         .route("/internal/fleet/sync", post(handlers::sync_fleet_now))
         .route("/metrics/prometheus", get(handlers::prometheus_metrics))
+        .route("/v1/model/start", post(handlers::model_start))
+        .route("/v1/model/stop", post(handlers::model_stop))
+        .route("/v1/model/status", get(handlers::model_status))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

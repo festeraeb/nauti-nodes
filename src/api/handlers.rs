@@ -901,3 +901,79 @@ pub async fn metrics(State(state): State<AppState>) -> Json<serde_json::Value> {
     json["active_jobs"] = serde_json::json!(state.jobs.active_count());
     Json(json)
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ModelStartRequest {
+    pub model_id: String,
+    pub port: Option<u16>,
+    pub node_id: Option<String>,
+}
+
+pub async fn model_start(
+    State(state): State<AppState>,
+    Json(req): Json<ModelStartRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if let Some(node_id) = &req.node_id {
+        if state.revocations.is_revoked(node_id) {
+            return Err((StatusCode::FORBIDDEN, "node identity is revoked".into()));
+        }
+        if let Some(rt) = state.registry.get_node(node_id) {
+            if let Ok(md) = rt.metadata.read() {
+                if matches!(
+                    md.lifecycle_state,
+                    crate::types::NodeLifecycleState::Withdrawn
+                        | crate::types::NodeLifecycleState::Draining
+                        | crate::types::NodeLifecycleState::Revoked
+                        | crate::types::NodeLifecycleState::Offline
+                ) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        format!("node lifecycle state '{:?}' prohibits starting model", md.lifecycle_state),
+                    ));
+                }
+            }
+        }
+    }
+
+    let proc = state
+        .model_manager
+        .request_model(&req.model_id, req.port.unwrap_or(5200), 16384)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    if let Some(node_id) = &req.node_id {
+        if let Some(rt) = state.registry.get_node(node_id) {
+            if let Ok(mut md) = rt.metadata.write() {
+                md.capabilities.models = vec![req.model_id.clone()];
+                md.inference_url = proc.base_url.clone();
+                md.addr = proc.base_url.clone();
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "started": true,
+        "model_id": req.model_id,
+        "port": proc.port,
+        "base_url": proc.base_url,
+        "pid": proc.pid
+    })))
+}
+
+pub async fn model_stop(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .model_manager
+        .stop_model()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "stopped": true })))
+}
+
+pub async fn model_status(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let status = state.model_manager.get_status();
+    Json(serde_json::to_value(status).unwrap_or_default())
+}

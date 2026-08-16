@@ -12,6 +12,13 @@
 use crate::capabilities::RuntimeClass;
 use serde::{Deserialize, Serialize};
 
+pub mod manager;
+
+pub use manager::{
+    LlamaServerBackend, LocalModelConfig, ModelManager, ModelManagerStatus, ModelManifest,
+    ModelState, ProcessInfo, RuntimeBackend,
+};
+
 /// Health status of a runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeHealth {
