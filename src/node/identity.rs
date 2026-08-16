@@ -48,10 +48,12 @@ impl NodeIdentity {
                 .map_err(|e| crate::types::Error::Internal(format!("read identity: {e}")))?;
             let identity: Self = serde_json::from_str(&data)
                 .map_err(|e| crate::types::Error::Internal(format!("parse identity: {e}")))?;
+            identity.validate()?;
             info!(node_id = %identity.node_id, "loaded existing node identity");
             Ok(identity)
         } else {
             let identity = Self::generate();
+            identity.validate()?;
             let data = serde_json::to_string_pretty(&identity)
                 .map_err(|e| crate::types::Error::Internal(format!("serialize identity: {e}")))?;
             if let Some(parent) = path.parent() {
@@ -61,9 +63,33 @@ impl NodeIdentity {
             }
             std::fs::write(path, &data)
                 .map_err(|e| crate::types::Error::Internal(format!("write identity: {e}")))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            }
             info!(node_id = %identity.node_id, path = %path.display(), "generated new node identity");
             Ok(identity)
         }
+    }
+
+    /// Validate the structural and cryptographic integrity of this identity.
+    pub fn validate(&self) -> crate::types::Result<()> {
+        if uuid::Uuid::parse_str(&self.node_id).is_err() {
+            return Err(crate::types::Error::Internal("invalid UUID in node identity".into()));
+        }
+        if self.public_key.len() != 32 {
+            return Err(crate::types::Error::Internal("invalid public key length".into()));
+        }
+        if self.secret_key.len() != 32 {
+            return Err(crate::types::Error::Internal("invalid secret key length".into()));
+        }
+        let signing_key = self.signing_key()?;
+        let derived_pub = signing_key.verifying_key().to_bytes().to_vec();
+        if derived_pub != self.public_key {
+            return Err(crate::types::Error::Internal("public/secret key mismatch".into()));
+        }
+        Ok(())
     }
 
     /// Get the ed25519 SigningKey from the stored secret bytes.

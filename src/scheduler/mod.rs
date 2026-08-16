@@ -179,6 +179,7 @@ mod tests {
             },
             last_hardware_probe: Some(crate::types::now_ms()),
             health_state: "ONLINE".to_string(),
+            ..Default::default()
         }
     }
 

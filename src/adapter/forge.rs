@@ -81,6 +81,7 @@ pub fn fleet_node(id: &str, url: &str, role: &str, gpu: &str, vram: u32) -> Node
         },
         last_hardware_probe: Some(crate::types::now_ms()),
         health_state: "ONLINE".to_string(),
+        ..Default::default()
     }
 }
 

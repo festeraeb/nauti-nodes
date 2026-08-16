@@ -186,7 +186,21 @@ pub fn pick_node_for_role(
                 Ok(m) => m,
                 Err(_) => return false,
             };
-            if !md.online {
+            if !md.online
+                || md.health_state == "DRAINING"
+                || md.health_state == "WITHDRAWN"
+                || md.health_state == "REVOKED"
+                || md.health_state == "OFFLINE"
+                || md.health_state == "DEGRADED"
+                || matches!(
+                    md.lifecycle_state,
+                    crate::types::NodeLifecycleState::Draining
+                        | crate::types::NodeLifecycleState::Withdrawn
+                        | crate::types::NodeLifecycleState::Revoked
+                        | crate::types::NodeLifecycleState::Offline
+                        | crate::types::NodeLifecycleState::Degraded
+                )
+            {
                 return false;
             }
 
@@ -234,7 +248,21 @@ pub fn pick_node_for_role(
                 rt.metadata
                     .read()
                     .map(|m| {
-                        if !m.online {
+                        if !m.online
+                            || m.health_state == "DRAINING"
+                            || m.health_state == "WITHDRAWN"
+                            || m.health_state == "REVOKED"
+                            || m.health_state == "OFFLINE"
+                            || m.health_state == "DEGRADED"
+                            || matches!(
+                                m.lifecycle_state,
+                                crate::types::NodeLifecycleState::Draining
+                                    | crate::types::NodeLifecycleState::Withdrawn
+                                    | crate::types::NodeLifecycleState::Revoked
+                                    | crate::types::NodeLifecycleState::Offline
+                                    | crate::types::NodeLifecycleState::Degraded
+                            )
+                        {
                             return false;
                         }
                         let is_live_obs = if let Some(ref obs) = m.observed {

@@ -46,15 +46,19 @@ impl NodeRegistry {
     }
 
     pub fn remove_stale(&self, stale_after_ms: u64, now_ms: u64) -> Vec<NodeId> {
-        use crate::types::ReconciliationStatus;
+        use crate::types::{NodeLifecycleState, ReconciliationStatus};
         let mut changed = Vec::new();
         for mut ref_multi in self.nodes.iter_mut() {
             let rt = ref_multi.value();
             let age = now_ms.saturating_sub(rt.last_heartbeat_ms());
             if let Ok(mut md) = rt.metadata.write() {
+                if md.health_state == "WITHDRAWN" || md.health_state == "DRAINING" || md.health_state == "REVOKED" {
+                    continue;
+                }
                 let prev_health = md.health_state.clone();
                 if age > stale_after_ms {
                     md.health_state = "OFFLINE".to_string();
+                    md.lifecycle_state = NodeLifecycleState::Offline;
                     md.online = false;
                     md.reconciliation.status = ReconciliationStatus::OFFLINE;
                     if prev_health != "OFFLINE" {
@@ -62,12 +66,14 @@ impl NodeRegistry {
                     }
                 } else if age > 15000 {
                     md.health_state = "STALE".to_string();
+                    md.lifecycle_state = NodeLifecycleState::Degraded;
                     md.reconciliation.status = ReconciliationStatus::STALE;
                     if prev_health != "STALE" {
                         changed.push(md.id.clone());
                     }
                 } else {
                     md.health_state = "ONLINE".to_string();
+                    md.lifecycle_state = NodeLifecycleState::Online;
                     if prev_health != "ONLINE" {
                         changed.push(md.id.clone());
                     }
@@ -128,6 +134,7 @@ mod tests {
             },
             last_hardware_probe: Some(crate::types::now_ms()),
             health_state: "ONLINE".to_string(),
+            ..Default::default()
         }
     }
 

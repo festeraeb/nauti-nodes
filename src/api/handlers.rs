@@ -482,6 +482,27 @@ pub async fn worker_register(
         AuthError::ReplayedNonce(_) => (StatusCode::CONFLICT, e.to_string()),
         _ => (StatusCode::UNAUTHORIZED, e.to_string()),
     })?;
+
+    // Check revocation store
+    if state.revocations.is_revoked(&req.node_id)
+        || state.revocations.is_revoked(&req.public_key_hex)
+    {
+        return Err((StatusCode::FORBIDDEN, "node identity is revoked".to_string()));
+    }
+
+    // Check duplicate node ID with different public key
+    if let Some(existing) = state.registry.get_node(&req.node_id) {
+        if let Ok(md) = existing.metadata.read() {
+            let existing_pub_hex = hex::encode(&md.public_key);
+            if !existing_pub_hex.is_empty() && existing_pub_hex != req.public_key_hex {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "node_id already registered under a different public key".to_string(),
+                ));
+            }
+        }
+    }
+
     state.nonce_tracker.mark_used(req.nonce.clone());
 
     let role = req.role.clone();
@@ -518,6 +539,7 @@ pub async fn worker_register(
         reconciliation: crate::types::ReconciledHardwareState::default(),
         last_hardware_probe: None,
         health_state: "ONLINE".to_string(),
+        lifecycle_state: crate::types::NodeLifecycleState::Online,
     };
 
     reconcile_node(&state.http, &state.config.forge_url, &mut meta).await;
@@ -549,6 +571,15 @@ pub async fn worker_heartbeat(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         hex::encode(&md.public_key)
     };
+
+    if state.revocations.is_revoked(&req.node_id) || state.revocations.is_revoked(&pub_key_hex) {
+        if let Ok(mut md) = rt.metadata.write() {
+            md.online = false;
+            md.health_state = "REVOKED".to_string();
+            md.lifecycle_state = crate::types::NodeLifecycleState::Revoked;
+        }
+        return Err((StatusCode::FORBIDDEN, "node identity is revoked".to_string()));
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -589,19 +620,128 @@ pub async fn worker_heartbeat(
         let observed =
             fetch_observed_hardware(&state.http, &state.config.forge_url, &req.node_id).await;
         if let Ok(mut md) = rt.metadata.write() {
-            md.online = true;
-            md.health_state = "ONLINE".to_string();
+            if md.health_state != "WITHDRAWN" && md.health_state != "DRAINING" && md.health_state != "REVOKED" {
+                md.online = true;
+                md.health_state = "ONLINE".to_string();
+                md.lifecycle_state = crate::types::NodeLifecycleState::Online;
+            }
             md.observed = observed;
             md.last_hardware_probe = Some(crate::types::now_ms());
             md.reconciliation = crate::types::reconcile_claim(&md.claim, &md.observed);
         }
     } else {
         if let Ok(mut md) = rt.metadata.write() {
-            md.online = true;
-            md.health_state = "ONLINE".to_string();
+            if md.health_state != "WITHDRAWN" && md.health_state != "DRAINING" && md.health_state != "REVOKED" {
+                md.online = true;
+                md.health_state = "ONLINE".to_string();
+                md.lifecycle_state = crate::types::NodeLifecycleState::Online;
+            }
         }
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeRequest {
+    pub identifier: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+pub async fn admin_revoke(
+    State(state): State<AppState>,
+    Json(req): Json<RevokeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    state
+        .revocations
+        .revoke(&req.identifier, &req.reason)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    for rt in state.registry.list_nodes() {
+        if let Ok(mut md) = rt.metadata.write() {
+            let pub_hex = hex::encode(&md.public_key);
+            if md.id == req.identifier || pub_hex == req.identifier {
+                md.online = false;
+                md.health_state = "REVOKED".to_string();
+                md.lifecycle_state = crate::types::NodeLifecycleState::Revoked;
+                md.reconciliation.status = crate::types::ReconciliationStatus::OFFLINE;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "revoked": req.identifier,
+        "reason": req.reason
+    })))
+}
+
+pub async fn admin_unrevoke(
+    State(state): State<AppState>,
+    Json(req): Json<RevokeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let unrevoked = state
+        .revocations
+        .unrevoke(&req.identifier)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "unrevoked": req.identifier,
+        "found": unrevoked
+    })))
+}
+
+pub async fn list_revocations(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let list = state
+        .revocations
+        .list_revoked()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!(list)))
+}
+
+pub async fn worker_withdraw(
+    State(state): State<AppState>,
+    Json(req): Json<crate::node::auth::SignedWithdrawRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let rt = state
+        .registry
+        .get_node(&req.node_id)
+        .ok_or((StatusCode::NOT_FOUND, "node not found".into()))?;
+
+    let pub_key_hex = {
+        let md = rt
+            .metadata
+            .read()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        hex::encode(&md.public_key)
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if now.abs_diff(req.timestamp_secs) > 300 {
+        return Err((StatusCode::UNAUTHORIZED, "stale request".into()));
+    }
+    if state.nonce_tracker.is_used(&req.nonce) {
+        return Err((StatusCode::UNAUTHORIZED, "replayed nonce".into()));
+    }
+
+    crate::node::auth::verify_signature(&pub_key_hex, &req.canonical_message(), &req.signature_hex)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+
+    state.nonce_tracker.mark_used(req.nonce.clone());
+
+    if let Ok(mut md) = rt.metadata.write() {
+        md.online = false;
+        md.health_state = "WITHDRAWN".to_string();
+        md.lifecycle_state = crate::types::NodeLifecycleState::Withdrawn;
+        md.reconciliation.status = crate::types::ReconciliationStatus::OFFLINE;
+    }
+
+    info!(node_id = %req.node_id, "node gracefully withdrawn");
+    Ok(Json(serde_json::json!({ "withdrawn": req.node_id })))
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

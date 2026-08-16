@@ -31,6 +31,10 @@ pub fn router(state: AppState) -> Router {
             "/internal/worker/heartbeat",
             post(handlers::worker_heartbeat),
         )
+        .route("/internal/worker/withdraw", post(handlers::worker_withdraw))
+        .route("/v1/admin/revoke", post(handlers::admin_revoke))
+        .route("/v1/admin/unrevoke", post(handlers::admin_unrevoke))
+        .route("/v1/admin/revocations", get(handlers::list_revocations))
         .route("/internal/quotas/set", post(handlers::set_quota_balance))
         .route("/internal/fleet/sync", post(handlers::sync_fleet_now))
         .route("/metrics/prometheus", get(handlers::prometheus_metrics))

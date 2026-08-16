@@ -146,6 +146,24 @@ impl SignedHeartbeat {
     }
 }
 
+/// A signed withdrawal request from a node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedWithdrawRequest {
+    pub node_id: String,
+    pub timestamp_secs: u64,
+    pub nonce: String,
+    pub signature_hex: String,
+}
+
+impl SignedWithdrawRequest {
+    pub fn canonical_message(&self) -> String {
+        format!(
+            "nauti-withdraw:{}:{}:{}",
+            self.node_id, self.timestamp_secs, self.nonce
+        )
+    }
+}
+
 /// Sign a message with an Ed25519 signing key.
 pub fn sign_message(signing_key: &ed25519_dalek::SigningKey, message: &str) -> String {
     let signature = signing_key.sign(message.as_bytes());

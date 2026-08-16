@@ -6,6 +6,7 @@ use crate::node::auth::NonceTracker;
 use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::scheduler::Scheduler;
+use crate::node::revocation::RevocationStore;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -19,12 +20,14 @@ pub struct AppState {
     pub lineage: Option<Arc<LineageStore>>,
     pub metrics: FederationMetrics,
     pub nonce_tracker: Arc<NonceTracker>,
+    pub revocations: Arc<RevocationStore>,
 }
 
 impl AppState {
     pub fn new(config: Config) -> crate::types::Result<Self> {
         let registry = Arc::new(NodeRegistry::new());
         let scheduler = Arc::new(Scheduler::new(registry.clone(), &config.db_url)?);
+        let revocations = Arc::new(RevocationStore::open(&config.db_url)?);
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
@@ -39,6 +42,7 @@ impl AppState {
             lineage: None,
             metrics: FederationMetrics::new(),
             nonce_tracker: Arc::new(NonceTracker::new()),
+            revocations,
         })
     }
 }

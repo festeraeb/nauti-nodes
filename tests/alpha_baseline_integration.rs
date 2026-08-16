@@ -287,6 +287,7 @@ async fn test_failure_case_9_hardware_mismatch() {
         },
         last_hardware_probe: Some(nauti_nodes::types::now_ms()),
         health_state: "ONLINE".to_string(),
+        ..Default::default()
     };
 
     registry.register_node(meta);

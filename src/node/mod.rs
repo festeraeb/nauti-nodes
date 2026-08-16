@@ -4,3 +4,4 @@ pub mod identity;
 pub mod manager;
 pub mod peer;
 pub mod registry;
+pub mod revocation;

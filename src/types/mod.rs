@@ -173,6 +173,40 @@ pub fn reconcile_claim(
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NodeLifecycleState {
+    Joining,
+    Verifying,
+    Online,
+    Degraded,
+    Draining,
+    Offline,
+    Withdrawn,
+    Revoked,
+}
+
+impl Default for NodeLifecycleState {
+    fn default() -> Self {
+        Self::Online
+    }
+}
+
+impl NodeLifecycleState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Joining => "JOINING",
+            Self::Verifying => "VERIFYING",
+            Self::Online => "ONLINE",
+            Self::Degraded => "DEGRADED",
+            Self::Draining => "DRAINING",
+            Self::Offline => "OFFLINE",
+            Self::Withdrawn => "WITHDRAWN",
+            Self::Revoked => "REVOKED",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeMetadata {
     pub id: NodeId,
@@ -198,6 +232,8 @@ pub struct NodeMetadata {
     pub last_hardware_probe: Option<u64>,
     #[serde(default = "default_health")]
     pub health_state: String,
+    #[serde(default)]
+    pub lifecycle_state: NodeLifecycleState,
 }
 
 impl Default for NodeMetadata {
@@ -221,6 +257,7 @@ impl Default for NodeMetadata {
             reconciliation: ReconciledHardwareState::default(),
             last_hardware_probe: None,
             health_state: "ONLINE".to_string(),
+            lifecycle_state: NodeLifecycleState::Online,
         }
     }
 }
