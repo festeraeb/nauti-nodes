@@ -35,12 +35,13 @@ pub fn spawn_job(
             Ok(())
         };
 
+        let max_tokens = (reserved_tokens as u32).min(2048);
         let result = llama::stream_chat(
             &client,
             &url,
             &model,
             &messages,
-            2048,
+            max_tokens,
             0.7,
             cancelled.clone(),
             send,

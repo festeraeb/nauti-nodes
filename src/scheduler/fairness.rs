@@ -371,7 +371,10 @@ mod tests {
         assert_eq!(report.starvation_events, 0);
         let total_tracked: u64 = report.per_lineage.values().sum();
         assert_eq!(total_tracked, 30000);
-        assert!(report.passed, "Fairness report should pass strict 2:1 bounds");
+        assert!(
+            report.passed,
+            "Fairness report should pass strict 2:1 bounds"
+        );
     }
 
     #[test]
@@ -385,7 +388,10 @@ mod tests {
             report.service_ratio
         );
         assert_eq!(report.starvation_events, 0);
-        assert!(report.passed, "Fairness report should pass strict 2:1 convergence");
+        assert!(
+            report.passed,
+            "Fairness report should pass strict 2:1 convergence"
+        );
     }
 
     #[test]

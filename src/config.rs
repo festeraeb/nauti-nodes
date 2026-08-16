@@ -20,6 +20,7 @@ pub struct Config {
     pub worker_id: String,
     pub worker_role: String,
     pub worker_gpu: String,
+    pub strict_alpha: bool,
 }
 
 impl Default for Config {
@@ -36,6 +37,7 @@ impl Default for Config {
             worker_id: "RTX2060".to_string(),
             worker_role: "thinker".to_string(),
             worker_gpu: "RTX 2060 SUPER".to_string(),
+            strict_alpha: true,
         }
     }
 }
@@ -77,6 +79,18 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NAUTI_WORKER_GPU") {
             c.worker_gpu = v;
+        }
+        if let Ok(v) = std::env::var("NAUTI_STRICT_ALPHA") {
+            c.strict_alpha = match v.to_lowercase().as_str() {
+                "0" | "false" | "no" | "off" => false,
+                _ => true,
+            };
+        }
+        if let Ok(v) = std::env::var("NAUTI_ALPHA_MODE") {
+            c.strict_alpha = match v.to_lowercase().as_str() {
+                "0" | "false" | "no" | "off" => false,
+                _ => true,
+            };
         }
         Ok(c)
     }

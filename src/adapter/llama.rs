@@ -89,8 +89,11 @@ pub async fn stream_chat(
                     continue;
                 }
                 let data = line.trim_start_matches("data: ").trim();
-                if data.is_empty() || data == "[DONE]" {
+                if data.is_empty() {
                     continue;
+                }
+                if data == "[DONE]" {
+                    return Ok(());
                 }
                 if let Ok(chunk) = serde_json::from_str::<StreamChunk>(data) {
                     if let Some(choices) = chunk.choices {

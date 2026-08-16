@@ -119,8 +119,7 @@ impl CheckpointStore {
     pub fn load(&self, job_id: &str) -> std::io::Result<CheckpointData> {
         let path = self.path_for(job_id);
         let raw = std::fs::read_to_string(&path)?;
-        serde_json::from_str(&raw)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        serde_json::from_str(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 
     /// Remove a checkpoint file once the job has been successfully resumed.
@@ -676,11 +675,17 @@ mod process_preemption_tests {
         let handle = ProcessPreemptionHandle::new("test-job-sleep", child)
             .with_timeout(std::time::Duration::from_millis(200));
 
-        assert!(handle.is_alive(), "process should be alive before preemption");
+        assert!(
+            handle.is_alive(),
+            "process should be alive before preemption"
+        );
 
         let result = handle.preempt().expect("preempt() returned an IO error");
         assert!(result, "preempt() should return true for a running process");
-        assert!(!handle.is_alive(), "handle should be empty after preemption");
+        assert!(
+            !handle.is_alive(),
+            "handle should be empty after preemption"
+        );
 
         // Verify the OS process is no longer alive via kill(pid, 0)
         let rc = unsafe { libc::kill(pid as i32, 0) };
@@ -705,7 +710,10 @@ mod process_preemption_tests {
         // Process already exited — preempt() should return Ok(false) gracefully
         let result = handle.preempt();
         // Allow either Ok(false) or Ok(true) — the important thing is no panic/error
-        assert!(result.is_ok(), "preempt() of exited process must not return Err");
+        assert!(
+            result.is_ok(),
+            "preempt() of exited process must not return Err"
+        );
     }
 }
 
@@ -756,7 +764,10 @@ mod checkpoint_store_tests {
 
         // Remove checkpoint after successful resume
         store2.remove("job-cp-1").expect("remove failed");
-        assert!(!store2.exists("job-cp-1"), "checkpoint must be gone after remove");
+        assert!(
+            !store2.exists("job-cp-1"),
+            "checkpoint must be gone after remove"
+        );
     }
 
     #[test]
@@ -776,7 +787,13 @@ mod checkpoint_store_tests {
         store.save(&data).expect("save failed");
 
         let tmp = dir.path().join("job-atomic.tmp");
-        assert!(!tmp.exists(), ".tmp file must not exist after atomic rename");
-        assert!(store.exists("job-atomic"), "final checkpoint file must exist");
+        assert!(
+            !tmp.exists(),
+            ".tmp file must not exist after atomic rename"
+        );
+        assert!(
+            store.exists("job-atomic"),
+            "final checkpoint file must exist"
+        );
     }
 }

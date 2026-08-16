@@ -34,6 +34,8 @@ pub struct InferenceRequest {
     pub max_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
+    #[serde(default)]
+    pub privacy_class: Option<crate::capabilities::PrivacyClass>,
 }
 
 fn default_avoid_p100() -> bool {
@@ -147,6 +149,27 @@ pub async fn inference(
         "no eligible nodes (try starting llama on cesarops2 :5200)".to_string(),
     ))?;
 
+    // Enforce privacy boundary: external alpha workers accept ONLY Public workloads
+    let target_privacy = req
+        .privacy_class
+        .unwrap_or(crate::capabilities::PrivacyClass::Public);
+    if target_privacy != crate::capabilities::PrivacyClass::Public {
+        let md = rt
+            .metadata
+            .read()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if md.capabilities.role == "external_alpha"
+            || md.role == "external_alpha"
+            || md.id.contains("external")
+        {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "non-public workload privacy class unauthorized for external alpha worker"
+                    .to_string(),
+            ));
+        }
+    }
+
     // Phase 4: API key + credit ledger reservation.
     let api_key = extract_api_key(&headers).ok_or((
         StatusCode::UNAUTHORIZED,
@@ -218,10 +241,21 @@ pub async fn inference(
     if !req.stream {
         let mut rx = tx.subscribe();
         let mut full = String::new();
-        while let Ok(chunk) = rx.recv().await {
-            full.push_str(&chunk);
+        loop {
             if record.done.load(Ordering::Relaxed) {
+                while let Ok(chunk) = rx.try_recv() {
+                    full.push_str(&chunk);
+                }
                 break;
+            }
+            match tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(chunk)) => {
+                    full.push_str(&chunk);
+                }
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    // Timeout slice — check record.done on next loop iteration
+                }
             }
         }
         return Ok(Json(serde_json::json!({

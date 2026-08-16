@@ -35,8 +35,7 @@ pub fn inference_url_for(host: &str, port: i64) -> String {
     }
 }
 
-/// Build a NodeMetadata from raw fields (test-only helper).
-#[cfg(test)]
+/// Build a NodeMetadata from raw fields (test helper).
 pub fn fleet_node(id: &str, url: &str, role: &str, gpu: &str, vram: u32) -> NodeMetadata {
     NodeMetadata {
         id: id.to_string(),

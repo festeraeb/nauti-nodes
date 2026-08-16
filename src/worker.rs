@@ -36,6 +36,12 @@ pub async fn run_worker(config: Config) -> Result<()> {
         );
         (gpu.name.clone(), gpu.total_memory_mb)
     } else {
+        if config.strict_alpha {
+            tracing::error!("strict alpha mode: no physical GPU discovered — refusing synthetic fallback");
+            return Err(crate::types::Error::Config(
+                "strict alpha mode requires physical GPU hardware discovery".into(),
+            ));
+        }
         warn!("no GPU discovered; using env-var fallback");
         (config.worker_gpu.clone(), 8192)
     };
@@ -75,6 +81,8 @@ pub async fn run_worker(config: Config) -> Result<()> {
         let (free_vram, tokens_per_sec) = if online {
             if let Some(gpu) = current_gpus.first() {
                 (gpu.free_memory_mb, 25.0)
+            } else if config.strict_alpha {
+                (0, 0.0)
             } else {
                 (7000, 25.0)
             }

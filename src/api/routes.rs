@@ -12,6 +12,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(handlers::health))
         .route("/metrics", get(handlers::metrics))
         .route("/v1/inference", post(handlers::inference))
+        .route("/v1/chat/completions", post(handlers::inference))
         .route(
             "/v1/inference/cancel/:job_id",
             post(handlers::cancel_inference),
@@ -20,7 +21,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/nodes", get(handlers::list_nodes))
         .route("/v1/node/identity", get(handlers::node_identity))
         .route("/v1/node/join", post(handlers::node_join))
-        .route("/v1/admin/reconciliation", get(handlers::admin_reconciliation))
+        .route(
+            "/v1/admin/reconciliation",
+            get(handlers::admin_reconciliation),
+        )
         .route("/v1/tree/snapshot", get(handlers::tree_snapshot))
         .route("/internal/worker/register", post(handlers::worker_register))
         .route(

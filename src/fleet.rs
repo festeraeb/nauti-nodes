@@ -101,32 +101,39 @@ pub async fn sync_fleet(registry: &NodeRegistry, client: &reqwest::Client, forge
         }
 
         if observed.is_none() {
-            let local_gpus = crate::gpu::discover_gpus();
-            if !local_gpus.is_empty() {
-                if m.id == "cognitive-worker" {
-                    if let Some(gpu) = local_gpus
-                        .iter()
-                        .find(|g| g.name.contains("2060") || g.name.contains("RTX"))
-                    {
-                        observed = Some(crate::types::ObservedHardware {
-                            gpu_name: gpu.name.clone(),
-                            vram_mb: gpu.total_memory_mb,
-                            vendor: gpu.vendor.clone(),
-                            device_count: local_gpus.len() as u32,
-                            driver_version: gpu.driver_version.clone(),
-                            temperature_c: gpu.temperature_c.map(|t| t as u32),
-                            node_id: m.id.clone(),
-                            observer_node_id: "local".to_string(),
-                            source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
-                            provider: "all-smi".to_string(),
-                            observed_at: Some(crate::types::now_ms()),
-                            received_at: Some(crate::types::now_ms()),
-                            measurement_id: None,
-                            device_id: None,
-                            sequence: None,
-                            age_ms: None,
-                            source_endpoint: None,
-                        });
+            if let Some(existing_obs) = registry
+                .get_node(&m.id)
+                .and_then(|rt| rt.metadata.read().ok().and_then(|md| md.observed.clone()))
+            {
+                observed = Some(existing_obs);
+            } else {
+                let local_gpus = crate::gpu::discover_gpus();
+                if !local_gpus.is_empty() {
+                    if m.id == "cognitive-worker" {
+                        if let Some(gpu) = local_gpus
+                            .iter()
+                            .find(|g| g.name.contains("2060") || g.name.contains("RTX"))
+                        {
+                            observed = Some(crate::types::ObservedHardware {
+                                gpu_name: gpu.name.clone(),
+                                vram_mb: gpu.total_memory_mb,
+                                vendor: gpu.vendor.clone(),
+                                device_count: local_gpus.len() as u32,
+                                driver_version: gpu.driver_version.clone(),
+                                temperature_c: gpu.temperature_c.map(|t| t as u32),
+                                node_id: m.id.clone(),
+                                observer_node_id: "local".to_string(),
+                                source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
+                                provider: "all-smi".to_string(),
+                                observed_at: Some(crate::types::now_ms()),
+                                received_at: Some(crate::types::now_ms()),
+                                measurement_id: None,
+                                device_id: None,
+                                sequence: None,
+                                age_ms: None,
+                                source_endpoint: None,
+                            });
+                        }
                     }
                 }
             }
