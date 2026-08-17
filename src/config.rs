@@ -24,6 +24,7 @@ pub struct Config {
     pub protocol_version: u32,
     pub external_alpha_enabled: bool,
     pub is_external_alpha: bool,
+    pub admin_key: Option<String>,
 }
 
 impl Default for Config {
@@ -44,6 +45,7 @@ impl Default for Config {
             protocol_version: crate::node::auth::CURRENT_PROTOCOL_VERSION,
             external_alpha_enabled: true,
             is_external_alpha: true,
+            admin_key: None,
         }
     }
 }
@@ -67,6 +69,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NAUTI_IDENTITY_PATH") {
             c.identity_path = v;
+        }
+        if let Ok(v) = std::env::var("NAUTI_AUTH_KEYPAIR_PATH") {
+            c.auth_keypair_path = v;
         }
         if let Ok(v) = std::env::var("FORGE_URL") {
             c.forge_url = v;
@@ -117,6 +122,9 @@ impl Config {
                 _ => true,
             };
         }
+        if let Ok(v) = std::env::var("NAUTI_ADMIN_KEY") {
+            c.admin_key = Some(v);
+        }
         Ok(c)
     }
 
@@ -126,6 +134,9 @@ impl Config {
         s.auth_keypair_path = "[REDACTED]".to_string();
         if !s.db_url.starts_with("sqlite::memory:") {
             s.db_url = "[REDACTED_DB_URL]".to_string();
+        }
+        if s.admin_key.is_some() {
+            s.admin_key = Some("[REDACTED_ADMIN_KEY]".to_string());
         }
         s
     }

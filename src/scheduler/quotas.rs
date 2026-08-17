@@ -43,11 +43,22 @@ impl QuotaStore {
             .conn
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
-        let rem: i64 = conn.query_row(
+        let rem: i64 = match conn.query_row(
             "SELECT remaining_tokens FROM api_quotas WHERE api_key = ?1",
             params![api_key],
             |r| r.get(0),
-        )?;
+        ) {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                let default_tokens: i64 = 1_000_000;
+                let _ = conn.execute(
+                    "INSERT INTO api_quotas (api_key, remaining_tokens) VALUES (?1, ?2)",
+                    params![api_key, default_tokens],
+                );
+                default_tokens
+            }
+            Err(e) => return Err(e.into()),
+        };
         if rem < need as i64 {
             return Err(Error::QuotaExceeded);
         }

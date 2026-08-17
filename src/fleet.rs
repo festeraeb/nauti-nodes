@@ -187,6 +187,7 @@ pub fn pick_node_for_role(
                 Ok(m) => m,
                 Err(_) => return false,
             };
+            info!(id = %md.id, online = md.online, health = %md.health_state, role = %md.role, gpu = %md.gpu_name, reconciliation = ?md.reconciliation.status, "evaluating node for role");
             if !md.online
                 || md.health_state == "DRAINING"
                 || md.health_state == "WITHDRAWN"
@@ -215,13 +216,14 @@ pub fn pick_node_for_role(
                         | crate::types::TelemetrySourceType::RemoteLiveObservation
                 )
             } else {
-                false
+                true // Allow volunteer nodes with self-reported claim when remote Forge is absent
             };
             let eligible = is_live_obs
                 && matches!(
                     md.reconciliation.status,
                     crate::types::ReconciliationStatus::MATCH
                         | crate::types::ReconciliationStatus::PARTIAL_MATCH
+                        | crate::types::ReconciliationStatus::UNVERIFIED
                 );
             if !eligible {
                 return false;
@@ -242,6 +244,8 @@ pub fn pick_node_for_role(
             }
         })
         .collect();
+
+    info!(role = %role, avoid_p100 = avoid_p100, candidate_count = candidates.len(), "pick_node_for_role candidates phase 1");
 
     if candidates.is_empty() {
         candidates = registry
@@ -277,19 +281,52 @@ pub fn pick_node_for_role(
                                     | crate::types::TelemetrySourceType::RemoteLiveObservation
                             )
                         } else {
-                            false
+                            true
                         };
                         let eligible = is_live_obs
                             && matches!(
                                 m.reconciliation.status,
                                 crate::types::ReconciliationStatus::MATCH
                                     | crate::types::ReconciliationStatus::PARTIAL_MATCH
+                                    | crate::types::ReconciliationStatus::UNVERIFIED
                             );
                         eligible && (!avoid_p100 || !m.gpu_name.contains("P100"))
                     })
                     .unwrap_or(false)
             })
             .collect();
+        info!(
+            candidate_count = candidates.len(),
+            "pick_node_for_role candidates phase 2"
+        );
+    }
+    if candidates.is_empty() {
+        candidates = registry
+            .list_nodes()
+            .into_iter()
+            .filter(|rt| {
+                rt.metadata
+                    .read()
+                    .map(|m| {
+                        m.online
+                            && m.reconciliation.status
+                                != crate::types::ReconciliationStatus::MISMATCH
+                            && !matches!(
+                                m.lifecycle_state,
+                                crate::types::NodeLifecycleState::Draining
+                                    | crate::types::NodeLifecycleState::Withdrawn
+                                    | crate::types::NodeLifecycleState::Revoked
+                                    | crate::types::NodeLifecycleState::Offline
+                                    | crate::types::NodeLifecycleState::Degraded
+                            )
+                    })
+                    .unwrap_or(false)
+            })
+            .collect();
+        info!(
+            candidate_count = candidates.len(),
+            "pick_node_for_role candidates phase 3"
+        );
     }
 
     // Prefer RTX2060 explicitly for thinker when P100s are busy

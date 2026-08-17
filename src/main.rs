@@ -8,6 +8,13 @@ async fn main() {
     let json_output = args.iter().any(|a| a == "--json");
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("run");
 
+    if args.iter().any(|a| a == "--version" || a == "-V") || cmd == "version" {
+        let ver = option_env!("NAUTI_VERSION").unwrap_or("0.1.0-alpha.1");
+        let hash = option_env!("NAUTI_GIT_HASH").unwrap_or("unknown");
+        println!("nauti-nodes version {ver} (git commit {hash})");
+        return;
+    }
+
     match cmd {
         "preflight" => {
             if let Err(e) = cli::run_preflight(&config, json_output) {

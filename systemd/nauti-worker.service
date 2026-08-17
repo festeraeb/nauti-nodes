@@ -1,0 +1,22 @@
+[Unit]
+Description=Nauti Nodes Testbed 1 Volunteer Worker Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%U
+WorkingDirectory=%h/nauti-release
+EnvironmentFile=%h/nauti-release/.env
+ExecStart=%h/nauti-release/nauti-nodes worker
+Restart=always
+RestartSec=10s
+
+# Hardening / Security Limits
+ProtectHome=read-only
+ReadWritePaths=%h/.config/nauti %h/nauti-release
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

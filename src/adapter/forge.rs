@@ -92,7 +92,7 @@ pub async fn fetch_fleet_from_forge(
     let url = format!("{}/cluster/gpus", forge_url.trim_end_matches('/'));
     let resp = match client
         .get(&url)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_millis(500))
         .send()
         .await
     {

@@ -1,4 +1,5 @@
 use crate::adapter::llama::ChatMessage;
+use crate::config::Config;
 use crate::fleet;
 use crate::job_runner;
 use crate::jobs::JobRecord;
@@ -106,6 +107,8 @@ pub async fn list_nodes(State(state): State<AppState>) -> Json<serde_json::Value
                 "gpu_name": md.gpu_name,
                 "inference_url": md.inference_url,
                 "online": md.online,
+                "health_state": md.health_state,
+                "lifecycle_state": format!("{:?}", md.lifecycle_state),
                 "models": md.capabilities.models,
                 "vram_mb": md.capabilities.vram_mb,
                 "active_jobs": stats.active_jobs,
@@ -663,6 +666,33 @@ pub async fn worker_heartbeat(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+fn check_admin_auth(
+    headers: &axum::http::HeaderMap,
+    config: &Config,
+) -> Result<(), (StatusCode, String)> {
+    if let Some(expected_key) = &config.admin_key {
+        let provided_key = headers
+            .get("X-Admin-Key")
+            .and_then(|h| h.to_str().ok())
+            .or_else(|| {
+                headers
+                    .get("Authorization")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.strip_prefix("Bearer "))
+            });
+
+        match provided_key {
+            Some(k) if k == expected_key => Ok(()),
+            _ => Err((
+                StatusCode::UNAUTHORIZED,
+                "admin authentication required".into(),
+            )),
+        }
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RevokeRequest {
     pub identifier: String,
@@ -672,8 +702,10 @@ pub struct RevokeRequest {
 
 pub async fn admin_revoke(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<RevokeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     state
         .revocations
         .revoke(&req.identifier, &req.reason)
@@ -699,8 +731,10 @@ pub async fn admin_revoke(
 
 pub async fn admin_unrevoke(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<RevokeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     let unrevoked = state
         .revocations
         .unrevoke(&req.identifier)
@@ -1009,8 +1043,10 @@ pub struct ForgeReleaseRequest {
 
 pub async fn forge_reserve(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<crate::preemption::ForgeReservationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     if let Some(rt) = state.registry.get_node(&req.node_id) {
         if let Ok(mut md) = rt.metadata.write() {
             md.online = false;
@@ -1029,8 +1065,10 @@ pub async fn forge_reserve(
 
 pub async fn forge_release(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ForgeReleaseRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     let released = state.preemption.release_reservation(&req.mission_id);
     let mut restored = false;
     let mut resumed_count = 0;
@@ -1092,22 +1130,28 @@ pub async fn list_forge_reservations(State(state): State<AppState>) -> Json<serd
 
 pub async fn admin_disable_external_alpha(
     State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     state.external_alpha_enabled.store(false, Ordering::Relaxed);
     info!("operator kill switch engaged: external alpha disabled");
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "external_alpha_enabled": false,
         "status": "disabled"
-    }))
+    })))
 }
 
-pub async fn admin_enable_external_alpha(State(state): State<AppState>) -> Json<serde_json::Value> {
+pub async fn admin_enable_external_alpha(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     state.external_alpha_enabled.store(true, Ordering::Relaxed);
     info!("operator kill switch disengaged: external alpha enabled");
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "external_alpha_enabled": true,
         "status": "enabled"
-    }))
+    })))
 }
 
 pub async fn admin_kill_switch_status(State(state): State<AppState>) -> Json<serde_json::Value> {
