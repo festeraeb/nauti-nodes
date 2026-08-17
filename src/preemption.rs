@@ -505,6 +505,35 @@ impl PreemptionManager {
         resumed
     }
 
+    /// Check if a node is currently reserved by a Forge mission.
+    pub fn is_node_reserved(&self, node_id: &str) -> bool {
+        self.reservations
+            .lock()
+            .unwrap()
+            .values()
+            .any(|r| r.node_id == node_id)
+    }
+
+    /// Get active reservation for a node if any.
+    pub fn get_reservation_for_node(&self, node_id: &str) -> Option<ForgeReservationRequest> {
+        self.reservations
+            .lock()
+            .unwrap()
+            .values()
+            .find(|r| r.node_id == node_id)
+            .cloned()
+    }
+
+    /// List all active reservations.
+    pub fn list_reservations(&self) -> Vec<ForgeReservationRequest> {
+        self.reservations
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
+    }
+
     /// Number of active jobs.
     pub fn job_count(&self) -> usize {
         self.jobs.lock().unwrap().len()

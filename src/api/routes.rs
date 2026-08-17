@@ -41,6 +41,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/model/start", post(handlers::model_start))
         .route("/v1/model/stop", post(handlers::model_stop))
         .route("/v1/model/status", get(handlers::model_status))
+        .route("/v1/forge/reserve", post(handlers::forge_reserve))
+        .route("/v1/forge/release", post(handlers::forge_release))
+        .route("/v1/forge/reservations", get(handlers::list_forge_reservations))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

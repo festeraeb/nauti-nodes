@@ -977,3 +977,85 @@ pub async fn model_status(
     let status = state.model_manager.get_status();
     Json(serde_json::to_value(status).unwrap_or_default())
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ForgeReleaseRequest {
+    pub mission_id: String,
+    pub node_id: String,
+}
+
+pub async fn forge_reserve(
+    State(state): State<AppState>,
+    Json(req): Json<crate::preemption::ForgeReservationRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if let Some(rt) = state.registry.get_node(&req.node_id) {
+        if let Ok(mut md) = rt.metadata.write() {
+            md.online = false;
+            md.health_state = "RESERVED_FORGE".to_string();
+        }
+    }
+
+    let result = state.preemption.handle_reservation(&req);
+
+    // Yield local model runtime process cleanly
+    let _ = state.model_manager.stop_model().await;
+
+    info!(mission_id = %req.mission_id, node_id = %req.node_id, jobs_preempted = result.jobs_preempted, "Forge GPU reservation handled");
+    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+}
+
+pub async fn forge_release(
+    State(state): State<AppState>,
+    Json(req): Json<ForgeReleaseRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let released = state.preemption.release_reservation(&req.mission_id);
+    let mut restored = false;
+    let mut resumed_count = 0;
+    let mut reason = String::new();
+
+    if let Some(rt) = state.registry.get_node(&req.node_id) {
+        let (prohibited, current_model) = {
+            let md = rt.metadata.read().unwrap();
+            let prohibited = matches!(
+                md.lifecycle_state,
+                crate::types::NodeLifecycleState::Withdrawn
+                    | crate::types::NodeLifecycleState::Draining
+                    | crate::types::NodeLifecycleState::Revoked
+                    | crate::types::NodeLifecycleState::Offline
+            ) || md.health_state == "WITHDRAWN"
+                || md.health_state == "REVOKED"
+                || md.health_state == "DRAINING";
+            (prohibited, md.capabilities.role.clone())
+        };
+
+        if prohibited {
+            reason = "node lifecycle state prohibits shared compute recovery".to_string();
+        } else {
+            if let Ok(mut md) = rt.metadata.write() {
+                md.online = true;
+                md.health_state = "ONLINE".to_string();
+                md.reconciliation.status = crate::types::ReconciliationStatus::MATCH;
+            }
+            restored = true;
+            resumed_count = state.preemption.resume_checkpointed(&req.node_id);
+
+            // Attempt to restore shared model runtime if configured
+            let model_to_start = if current_model.is_empty() { "thinker" } else { &current_model };
+            let _ = state.model_manager.request_model(model_to_start, 5200, 16384).await;
+        }
+    }
+
+    info!(mission_id = %req.mission_id, node_id = %req.node_id, restored = restored, "Forge GPU reservation released");
+
+    Ok(Json(serde_json::json!({
+        "released": released,
+        "restored": restored,
+        "resumed_jobs": resumed_count,
+        "reason": reason
+    })))
+}
+
+pub async fn list_forge_reservations(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let res = state.preemption.list_reservations();
+    Json(serde_json::to_value(res).unwrap_or_default())
+}

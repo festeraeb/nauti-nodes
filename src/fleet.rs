@@ -192,6 +192,8 @@ pub fn pick_node_for_role(
                 || md.health_state == "REVOKED"
                 || md.health_state == "OFFLINE"
                 || md.health_state == "DEGRADED"
+                || md.health_state == "PREEMPTING"
+                || md.health_state == "RESERVED_FORGE"
                 || matches!(
                     md.lifecycle_state,
                     crate::types::NodeLifecycleState::Draining
@@ -254,6 +256,8 @@ pub fn pick_node_for_role(
                             || m.health_state == "REVOKED"
                             || m.health_state == "OFFLINE"
                             || m.health_state == "DEGRADED"
+                            || m.health_state == "PREEMPTING"
+                            || m.health_state == "RESERVED_FORGE"
                             || matches!(
                                 m.lifecycle_state,
                                 crate::types::NodeLifecycleState::Draining
