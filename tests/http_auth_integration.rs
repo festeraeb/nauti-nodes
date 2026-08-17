@@ -51,6 +51,7 @@ fn valid_join(key: &SigningKey) -> SignedJoinRequest {
         models: vec!["thinker".into()],
         timestamp_secs: now_secs(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(key, &req.canonical_message());

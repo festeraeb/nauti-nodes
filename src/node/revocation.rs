@@ -90,7 +90,8 @@ impl RevocationStore {
             .conn
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT identifier, reason, revoked_at_ms FROM revoked_nodes")?;
+        let mut stmt =
+            conn.prepare("SELECT identifier, reason, revoked_at_ms FROM revoked_nodes")?;
         let rows = stmt.query_map([], |r| {
             Ok(RevocationEntry {
                 identifier: r.get(0)?,

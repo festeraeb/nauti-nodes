@@ -43,7 +43,22 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/model/status", get(handlers::model_status))
         .route("/v1/forge/reserve", post(handlers::forge_reserve))
         .route("/v1/forge/release", post(handlers::forge_release))
-        .route("/v1/forge/reservations", get(handlers::list_forge_reservations))
+        .route(
+            "/v1/forge/reservations",
+            get(handlers::list_forge_reservations),
+        )
+        .route(
+            "/v1/admin/alpha/disable",
+            post(handlers::admin_disable_external_alpha),
+        )
+        .route(
+            "/v1/admin/alpha/enable",
+            post(handlers::admin_enable_external_alpha),
+        )
+        .route(
+            "/v1/admin/alpha/status",
+            get(handlers::admin_kill_switch_status),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

@@ -1,8 +1,14 @@
 //! Worker mode: register RTX 2060 (or local GPU) with coordinator + heartbeat.
 
 use crate::adapter::llama;
+use crate::node::auth::{
+    sign_message, SignedHeartbeat, SignedJoinRequest, CURRENT_PROTOCOL_VERSION,
+};
+use crate::node::identity::NodeIdentity;
 use crate::types::{NodeCapabilities, NodeMetadata, Result};
 use crate::Config;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 pub async fn run_worker(config: Config) -> Result<()> {
@@ -16,11 +22,26 @@ pub async fn run_worker(config: Config) -> Result<()> {
         .build()
         .map_err(|e| crate::types::Error::Internal(e.to_string()))?;
 
+    // Load or create persistent Ed25519 node identity
+    let id_path = Path::new(&config.identity_path);
+    let identity = NodeIdentity::load_or_create(id_path).map_err(|e| {
+        crate::types::Error::Internal(format!("failed to load/create identity: {e}"))
+    })?;
+    let signing_key = identity
+        .signing_key()
+        .map_err(|e| crate::types::Error::Internal(format!("invalid signing key: {e}")))?;
+    let public_key_hex = hex::encode(&identity.public_key);
+    let fingerprint = format!(
+        "ed25519:{}",
+        &public_key_hex[..16.min(public_key_hex.len())]
+    );
+
     let inference_url = config.local_inference_url.clone();
-    if !llama::health_ok(&client, &inference_url).await {
+    let runtime_online = llama::health_ok(&client, &inference_url).await;
+    if !runtime_online {
         warn!(
             url = %inference_url,
-            "local llama-server not responding — start llama on this GPU first"
+            "local llama-server not responding — ensure llama is running on this host"
         );
     }
 
@@ -37,12 +58,14 @@ pub async fn run_worker(config: Config) -> Result<()> {
         (gpu.name.clone(), gpu.total_memory_mb)
     } else {
         if config.strict_alpha {
-            tracing::error!("strict alpha mode: no physical GPU discovered — refusing synthetic fallback");
+            tracing::error!(
+                "strict alpha mode: no physical GPU discovered — refusing synthetic fallback"
+            );
             return Err(crate::types::Error::Config(
                 "strict alpha mode requires physical GPU hardware discovery".into(),
             ));
         }
-        warn!("no GPU discovered; using env-var fallback");
+        warn!("no GPU discovered; using fallback configuration");
         (config.worker_gpu.clone(), 8192)
     };
 
@@ -50,23 +73,53 @@ pub async fn run_worker(config: Config) -> Result<()> {
         "{}/internal/worker/register",
         config.coordinator_url.trim_end_matches('/')
     );
-    let body = serde_json::json!({
-        "id": config.worker_id,
-        "inference_url": inference_url,
-        "role": config.worker_role,
-        "gpu_name": gpu_name,
-        "vram_mb": vram_mb,
-        "models": [config.worker_role.clone()],
-    });
-    let _ = client.post(&register_url).json(&body).send().await;
 
-    info!(
-        worker_id = %config.worker_id,
-        role = %config.worker_role,
-        inference = %inference_url,
-        coordinator = %config.coordinator_url,
-        "worker registered"
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let nonce = uuid::Uuid::new_v4().to_string();
+
+    let mut join_req = SignedJoinRequest {
+        node_id: identity.node_id.clone(),
+        public_key_hex: public_key_hex.clone(),
+        inference_url: inference_url.clone(),
+        role: config.worker_role.clone(),
+        gpu_name: gpu_name.clone(),
+        vram_mb: vram_mb as u32,
+        models: vec![config.worker_role.clone()],
+        timestamp_secs: ts,
+        nonce,
+        protocol_version: config.protocol_version,
+        signature_hex: String::new(),
+    };
+    join_req.signature_hex = sign_message(&signing_key, &join_req.canonical_message());
+
+    let reg_resp = client.post(&register_url).json(&join_req).send().await;
+    let registration_success = match &reg_resp {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    };
+
+    println!("============================================================");
+    println!("NAUTI NODES VOLUNTEER WORKER ONLINE");
+    println!("============================================================");
+    println!("Node ID:              {}", identity.node_id);
+    println!("Public Fingerprint:   {}", fingerprint);
+    println!("Coordinator:          {}", config.coordinator_url);
+    println!(
+        "Registration Status:  {}",
+        if registration_success {
+            "SUCCESS"
+        } else {
+            "PENDING/REJECTED"
+        }
     );
+    println!("GPU Discovered:       {} ({} MiB VRAM)", gpu_name, vram_mb);
+    println!("Protocol Version:     v{}", config.protocol_version);
+    println!("Lifecycle State:      ONLINE");
+    println!("Workload Boundary:    PUBLIC ONLY");
+    println!("============================================================");
 
     let hb_url = format!(
         "{}/internal/worker/heartbeat",
@@ -80,7 +133,7 @@ pub async fn run_worker(config: Config) -> Result<()> {
         let current_gpus = crate::gpu::discover_gpus();
         let (free_vram, tokens_per_sec) = if online {
             if let Some(gpu) = current_gpus.first() {
-                (gpu.free_memory_mb, 25.0)
+                (gpu.free_memory_mb as u32, 25.0)
             } else if config.strict_alpha {
                 (0, 0.0)
             } else {
@@ -89,13 +142,25 @@ pub async fn run_worker(config: Config) -> Result<()> {
         } else {
             (0, 0.0)
         };
-        let body = serde_json::json!({
-            "node_id": config.worker_id,
-            "active_jobs": 0,
-            "free_vram_mb": free_vram,
-            "tokens_per_sec": tokens_per_sec,
-        });
-        if let Err(e) = client.post(&hb_url).json(&body).send().await {
+
+        let hb_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let hb_nonce = uuid::Uuid::new_v4().to_string();
+
+        let mut hb_req = SignedHeartbeat {
+            node_id: identity.node_id.clone(),
+            active_jobs: 0,
+            free_vram_mb: free_vram,
+            tokens_per_sec,
+            timestamp_secs: hb_ts,
+            nonce: hb_nonce,
+            signature_hex: String::new(),
+        };
+        hb_req.signature_hex = sign_message(&signing_key, &hb_req.canonical_message());
+
+        if let Err(e) = client.post(&hb_url).json(&hb_req).send().await {
             warn!("heartbeat failed: {e}");
         }
     }

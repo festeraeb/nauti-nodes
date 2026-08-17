@@ -190,7 +190,10 @@ impl RuntimeBackend for LlamaServerBackend {
         }
 
         if !Path::new(&config.artifact_path).exists() && !config.artifact_path.contains("test") {
-            return Err(format!("model artifact file missing: {}", config.artifact_path));
+            return Err(format!(
+                "model artifact file missing: {}",
+                config.artifact_path
+            ));
         }
 
         let mut cmd = tokio::process::Command::new(&binary);
@@ -205,8 +208,12 @@ impl RuntimeBackend for LlamaServerBackend {
             cmd.arg(arg);
         }
 
-        let child = cmd.spawn().map_err(|e| format!("failed to spawn llama-server: {e}"))?;
-        let pid = child.id().ok_or_else(|| "failed to obtain child PID".to_string())?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn llama-server: {e}"))?;
+        let pid = child
+            .id()
+            .ok_or_else(|| "failed to obtain child PID".to_string())?;
 
         Ok(ProcessInfo {
             pid,
@@ -237,7 +244,9 @@ impl RuntimeBackend for LlamaServerBackend {
                                 if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
                                     let found_models: Vec<String> = data
                                         .iter()
-                                        .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                                        .filter_map(|m| {
+                                            m.get("id").and_then(|id| id.as_str()).map(String::from)
+                                        })
                                         .collect();
                                     if !found_models.is_empty() {
                                         let matches = found_models.iter().any(|m| {
@@ -289,7 +298,11 @@ impl RuntimeBackend for LlamaServerBackend {
             if resp.status().is_success() {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                     if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
-                        if let Some(first) = data.first().and_then(|m| m.get("id")).and_then(|id| id.as_str()) {
+                        if let Some(first) = data
+                            .first()
+                            .and_then(|m| m.get("id"))
+                            .and_then(|id| id.as_str())
+                        {
                             return Some(first.to_string());
                         }
                     }
@@ -389,11 +402,20 @@ impl ModelManager {
                 return Ok(port);
             }
         }
-        Err(format!("no available port in range {}-{}", preferred, preferred + 10))
+        Err(format!(
+            "no available port in range {}-{}",
+            preferred,
+            preferred + 10
+        ))
     }
 
     /// Request a model to be loaded.
-    pub async fn request_model(&self, model_id: &str, preferred_port: u16, vram_available_mb: u32) -> Result<ProcessInfo, String> {
+    pub async fn request_model(
+        &self,
+        model_id: &str,
+        preferred_port: u16,
+        vram_available_mb: u32,
+    ) -> Result<ProcessInfo, String> {
         let config = match self.manifest.get(model_id).cloned() {
             Some(c) => c,
             None => {
@@ -435,7 +457,11 @@ impl ModelManager {
             guard.process = Some(process.clone());
         }
 
-        match self.backend.check_readiness(&process.base_url, model_id, 10).await {
+        match self
+            .backend
+            .check_readiness(&process.base_url, model_id, 10)
+            .await
+        {
             Ok(true) => {
                 let mut guard = self.inner.lock().unwrap();
                 guard.state = ModelState::Ready;

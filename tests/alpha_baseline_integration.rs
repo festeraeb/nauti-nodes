@@ -69,8 +69,12 @@ async fn start_server() -> (String, AppState) {
 #[tokio::test]
 async fn test_failure_case_1_forge_unavailable() {
     let client = reqwest::Client::new();
-    let nodes = nauti_nodes::adapter::forge::fetch_fleet_from_forge(&client, "http://127.0.0.1:1").await;
-    assert!(nodes.is_empty(), "Unreachable Forge must return empty fleet, not fake nodes");
+    let nodes =
+        nauti_nodes::adapter::forge::fetch_fleet_from_forge(&client, "http://127.0.0.1:1").await;
+    assert!(
+        nodes.is_empty(),
+        "Unreachable Forge must return empty fleet, not fake nodes"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -135,7 +139,11 @@ async fn test_failure_case_4_heartbeat_eviction() {
 
     // Evict stale nodes exceeding 1 second
     let stale = registry.remove_stale(1, nauti_nodes::types::now_ms() + 10_000);
-    assert_eq!(stale, vec!["stale-worker".to_string()], "Stale worker must be marked stale/offline");
+    assert_eq!(
+        stale,
+        vec!["stale-worker".to_string()],
+        "Stale worker must be marked stale/offline"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -145,7 +153,10 @@ async fn test_failure_case_4_heartbeat_eviction() {
 async fn test_failure_case_5_runtime_unavailable() {
     let client = reqwest::Client::new();
     let ok = nauti_nodes::adapter::llama::health_ok(&client, "http://127.0.0.1:1").await;
-    assert!(!ok, "Unreachable inference runtime must report health_ok = false");
+    assert!(
+        !ok,
+        "Unreachable inference runtime must report health_ok = false"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -166,6 +177,7 @@ async fn test_failure_case_7_invalid_signature() {
         models: vec!["thinker".into()],
         timestamp_secs: now_secs(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: "00".repeat(64), // Invalid signature
     };
 
@@ -198,6 +210,7 @@ async fn test_failure_case_8_replayed_nonce_and_stale() {
         models: vec!["thinker".into()],
         timestamp_secs: now_secs(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
@@ -293,7 +306,10 @@ async fn test_failure_case_9_hardware_mismatch() {
     registry.register_node(meta);
 
     let selected = nauti_nodes::fleet::pick_node_for_role(&registry, Some("thinker"), false);
-    assert!(selected.is_none(), "Hardware mismatch node MUST NOT be selected for inference");
+    assert!(
+        selected.is_none(),
+        "Hardware mismatch node MUST NOT be selected for inference"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -359,6 +375,7 @@ async fn test_real_gpu_inference_end_to_end() {
         models: vec!["thinker".into()],
         timestamp_secs: now_secs(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());

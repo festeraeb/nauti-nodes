@@ -5,10 +5,11 @@ use crate::metrics::FederationMetrics;
 use crate::node::auth::NonceTracker;
 use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
-use crate::scheduler::Scheduler;
 use crate::node::revocation::RevocationStore;
 use crate::preemption::PreemptionManager;
 use crate::runtime::ModelManager;
+use crate::scheduler::Scheduler;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -25,6 +26,7 @@ pub struct AppState {
     pub revocations: Arc<RevocationStore>,
     pub model_manager: Arc<ModelManager>,
     pub preemption: Arc<PreemptionManager>,
+    pub external_alpha_enabled: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
         let revocations = Arc::new(RevocationStore::open(&config.db_url)?);
         let model_manager = Arc::new(ModelManager::new());
         let preemption = Arc::new(PreemptionManager::new());
+        let external_alpha_enabled = Arc::new(AtomicBool::new(config.external_alpha_enabled));
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
@@ -51,6 +54,7 @@ impl AppState {
             revocations,
             model_manager,
             preemption,
+            external_alpha_enabled,
         })
     }
 }

@@ -164,7 +164,10 @@ async fn test_2_graceful_stop() {
     let mock = Arc::new(MockRuntimeBackend::default());
     let manager = ModelManager::with_backend(mock);
 
-    let _ = manager.request_model("thinker", 18200, 16384).await.unwrap();
+    let _ = manager
+        .request_model("thinker", 18200, 16384)
+        .await
+        .unwrap();
     assert_eq!(manager.get_status().state, ModelState::Ready);
 
     let stop_res = manager.stop_model().await;
@@ -184,7 +187,10 @@ async fn test_3_restart_runtime() {
     let mock = Arc::new(MockRuntimeBackend::default());
     let manager = ModelManager::with_backend(mock);
 
-    let _ = manager.request_model("thinker", 18200, 16384).await.unwrap();
+    let _ = manager
+        .request_model("thinker", 18200, 16384)
+        .await
+        .unwrap();
     let _ = manager.stop_model().await.unwrap();
     let res2 = manager.request_model("thinker", 18200, 16384).await;
 
@@ -200,8 +206,14 @@ async fn test_4_model_switch() {
     let mock = Arc::new(MockRuntimeBackend::default());
     let manager = ModelManager::with_backend(mock);
 
-    let _ = manager.request_model("thinker", 18200, 16384).await.unwrap();
-    assert_eq!(manager.get_status().loaded_model, Some("thinker".to_string()));
+    let _ = manager
+        .request_model("thinker", 18200, 16384)
+        .await
+        .unwrap();
+    assert_eq!(
+        manager.get_status().loaded_model,
+        Some("thinker".to_string())
+    );
 
     let _ = manager.stop_model().await.unwrap();
 
@@ -245,7 +257,9 @@ async fn test_6_missing_model_artifact() {
         extra_args: vec![],
     });
 
-    let res = real_manager.request_model("missing-model", 18200, 16384).await;
+    let res = real_manager
+        .request_model("missing-model", 18200, 16384)
+        .await;
     assert!(res.is_err());
     let status = real_manager.get_status();
     assert_eq!(status.state, ModelState::Failed);
@@ -320,14 +334,24 @@ async fn test_10_port_selection_fallback() {
             break;
         }
     }
-    assert!(bound_port > 0, "must find a free port to bind for fallback test");
+    assert!(
+        bound_port > 0,
+        "must find a free port to bind for fallback test"
+    );
 
     let mock = Arc::new(MockRuntimeBackend::default());
     let manager = ModelManager::with_backend(mock);
 
     // Preferred port bound_port is occupied, manager must fallback to bound_port + 1
-    let proc = manager.request_model("thinker", bound_port, 16384).await.unwrap();
-    assert_eq!(proc.port, bound_port + 1, "Port selection must fall back when preferred port is bound");
+    let proc = manager
+        .request_model("thinker", bound_port, 16384)
+        .await
+        .unwrap();
+    assert_eq!(
+        proc.port,
+        bound_port + 1,
+        "Port selection must fall back when preferred port is bound"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -351,12 +375,18 @@ async fn test_11_withdrawal_prohibits_model_start() {
         models: vec!["thinker".into()],
         timestamp_secs: now_secs(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     join_req.signature_hex = sign_message(&key, &join_req.canonical_message());
 
     let client = reqwest::Client::new();
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&join_req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&join_req)
+        .send()
+        .await
+        .unwrap();
 
     // Withdraw node
     let mut withdraw_req = nauti_nodes::node::auth::SignedWithdrawRequest {
@@ -366,7 +396,12 @@ async fn test_11_withdrawal_prohibits_model_start() {
         signature_hex: String::new(),
     };
     withdraw_req.signature_hex = sign_message(&key, &withdraw_req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/withdraw")).json(&withdraw_req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/internal/worker/withdraw"))
+        .json(&withdraw_req)
+        .send()
+        .await
+        .unwrap();
 
     // Attempt model start on withdrawn node -> 403 FORBIDDEN
     let resp = client
@@ -392,7 +427,10 @@ async fn test_12_revoked_node_prohibits_model_start() {
     let base = start_server_with_state(state.clone()).await;
 
     // Revoke node
-    state.revocations.revoke("revoked-model-node", "security violation").unwrap();
+    state
+        .revocations
+        .revoke("revoked-model-node", "security violation")
+        .unwrap();
 
     let client = reqwest::Client::new();
     let resp = client

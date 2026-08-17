@@ -220,6 +220,11 @@ impl WorkUnit {
         wu
     }
 
+    /// Check if this work unit is eligible for external alpha volunteer nodes (PUBLIC only).
+    pub fn is_eligible_for_external_alpha(&self) -> bool {
+        matches!(self.privacy_class, PrivacyClass::Public)
+    }
+
     /// Check if the lease is still valid.
     pub fn lease_valid(&self) -> bool {
         if self.state != WorkUnitState::Leased && self.state != WorkUnitState::Running {

@@ -52,7 +52,10 @@ impl NodeRegistry {
             let rt = ref_multi.value();
             let age = now_ms.saturating_sub(rt.last_heartbeat_ms());
             if let Ok(mut md) = rt.metadata.write() {
-                if md.health_state == "WITHDRAWN" || md.health_state == "DRAINING" || md.health_state == "REVOKED" {
+                if md.health_state == "WITHDRAWN"
+                    || md.health_state == "DRAINING"
+                    || md.health_state == "REVOKED"
+                {
                     continue;
                 }
                 let prev_health = md.health_state.clone();

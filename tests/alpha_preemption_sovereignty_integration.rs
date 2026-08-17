@@ -9,7 +9,9 @@ use nauti_nodes::{
     preemption::{CheckpointData, CheckpointStore, ForgeReservationRequest, PreemptibleJob},
     runtime::{ModelManager, ModelState, ProcessInfo, RuntimeBackend},
     state::AppState,
-    types::{now_ms, NodeLifecycleState, ObservedHardware, ReconciliationStatus, TelemetrySourceType},
+    types::{
+        now_ms, NodeLifecycleState, ObservedHardware, ReconciliationStatus, TelemetrySourceType,
+    },
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -75,7 +77,11 @@ impl RuntimeBackend for MockRuntimeBackend {
         true
     }
 
-    async fn start(&self, config: &nauti_nodes::runtime::LocalModelConfig, port: u16) -> Result<ProcessInfo, String> {
+    async fn start(
+        &self,
+        config: &nauti_nodes::runtime::LocalModelConfig,
+        port: u16,
+    ) -> Result<ProcessInfo, String> {
         if self.should_fail_start {
             return Err("mock start failed".to_string());
         }
@@ -88,7 +94,12 @@ impl RuntimeBackend for MockRuntimeBackend {
         })
     }
 
-    async fn check_readiness(&self, _base_url: &str, _expected_model: &str, _timeout_secs: u64) -> Result<bool, String> {
+    async fn check_readiness(
+        &self,
+        _base_url: &str,
+        _expected_model: &str,
+        _timeout_secs: u64,
+    ) -> Result<bool, String> {
         Ok(true)
     }
 
@@ -122,10 +133,16 @@ async fn test_1_idle_preemption_excludes_node() {
         models: vec!["thinker".into()],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
 
     // Mark live observation & MATCH reconciliation
     if let Some(rt) = state.registry.get_node(&node_id) {
@@ -153,7 +170,9 @@ async fn test_1_idle_preemption_excludes_node() {
         }
     }
 
-    assert!(nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_some());
+    assert!(
+        nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_some()
+    );
 
     // Trigger Forge reservation
     let res_req = ForgeReservationRequest {
@@ -163,11 +182,18 @@ async fn test_1_idle_preemption_excludes_node() {
         priority: 100,
         allow_preemption: true,
     };
-    let res_resp = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let res_resp = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res_resp.status().as_u16(), 200);
 
     // Verify node is now ineligible
-    assert!(nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_none());
+    assert!(
+        nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_none()
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -181,7 +207,10 @@ async fn test_2_ready_runtime_preemption() {
     // Start model runtime
     let mock = Arc::new(MockRuntimeBackend::default());
     let manager = ModelManager::with_backend(mock);
-    let _ = manager.request_model("thinker", 18300, 16384).await.unwrap();
+    let _ = manager
+        .request_model("thinker", 18300, 16384)
+        .await
+        .unwrap();
     assert_eq!(manager.get_status().state, ModelState::Ready);
 
     // Reserve node
@@ -192,7 +221,12 @@ async fn test_2_ready_runtime_preemption() {
         priority: 100,
         allow_preemption: true,
     };
-    let _ = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
 
     // Stop model via manager
     let _ = manager.stop_model().await;
@@ -220,7 +254,12 @@ async fn test_3_active_job_checkpointed() {
         allow_preemption: true,
     };
 
-    let resp = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let resp = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
 
     let result_json: serde_json::Value = resp.json().await.unwrap();
@@ -249,10 +288,16 @@ async fn test_4_release_and_recovery() {
         models: vec!["thinker".into()],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
 
     if let Some(rt) = state.registry.get_node(&node_id) {
         if let Ok(mut md) = rt.metadata.write() {
@@ -287,8 +332,15 @@ async fn test_4_release_and_recovery() {
         priority: 100,
         allow_preemption: true,
     };
-    let _ = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
-    assert!(nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_none());
+    let _ = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_none()
+    );
 
     // 2. Release
     let rel_resp = client
@@ -307,7 +359,9 @@ async fn test_4_release_and_recovery() {
     assert!(rel_json["restored"].as_bool().unwrap());
 
     // Node is eligible again
-    assert!(nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_some());
+    assert!(
+        nauti_nodes::fleet::pick_node_for_role(&state.registry, Some("thinker"), false).is_some()
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -327,10 +381,18 @@ async fn test_5_revoked_node_no_recovery_on_release() {
         priority: 100,
         allow_preemption: true,
     };
-    let _ = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
 
     // Revoke node during reservation
-    state.revocations.revoke(node_id, "banned during mission").unwrap();
+    state
+        .revocations
+        .revoke(node_id, "banned during mission")
+        .unwrap();
 
     // Release GPU
     let rel_resp = client
@@ -345,7 +407,10 @@ async fn test_5_revoked_node_no_recovery_on_release() {
 
     let json: serde_json::Value = rel_resp.json().await.unwrap();
     assert!(json["released"].as_bool().unwrap());
-    assert!(!json["restored"].as_bool().unwrap(), "Revoked node MUST NOT be restored on GPU release");
+    assert!(
+        !json["restored"].as_bool().unwrap(),
+        "Revoked node MUST NOT be restored on GPU release"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -368,10 +433,16 @@ async fn test_6_withdrawn_node_no_recovery_on_release() {
         models: vec!["thinker".into()],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
 
     // Reserve
     let res_req = ForgeReservationRequest {
@@ -381,7 +452,12 @@ async fn test_6_withdrawn_node_no_recovery_on_release() {
         priority: 100,
         allow_preemption: true,
     };
-    let _ = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
 
     // Withdraw node
     let mut wreq = nauti_nodes::node::auth::SignedWithdrawRequest {
@@ -391,7 +467,12 @@ async fn test_6_withdrawn_node_no_recovery_on_release() {
         signature_hex: String::new(),
     };
     wreq.signature_hex = sign_message(&key, &wreq.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/withdraw")).json(&wreq).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/internal/worker/withdraw"))
+        .json(&wreq)
+        .send()
+        .await
+        .unwrap();
 
     // Release
     let rel_resp = client
@@ -406,7 +487,10 @@ async fn test_6_withdrawn_node_no_recovery_on_release() {
 
     let json: serde_json::Value = rel_resp.json().await.unwrap();
     assert!(json["released"].as_bool().unwrap());
-    assert!(!json["restored"].as_bool().unwrap(), "Withdrawn node MUST NOT be restored on GPU release");
+    assert!(
+        !json["restored"].as_bool().unwrap(),
+        "Withdrawn node MUST NOT be restored on GPU release"
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -427,14 +511,34 @@ async fn test_7_idempotent_reservation_and_release() {
     };
 
     // Duplicate reservations
-    let r1 = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
-    let r2 = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let r1 = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
+    let r2 = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r1.status().as_u16(), 200);
     assert_eq!(r2.status().as_u16(), 200);
 
     // Duplicate releases
-    let rel1 = client.post(format!("{base}/v1/forge/release")).json(&serde_json::json!({ "mission_id": "mission-idem", "node_id": node_id })).send().await.unwrap();
-    let rel2 = client.post(format!("{base}/v1/forge/release")).json(&serde_json::json!({ "mission_id": "mission-idem", "node_id": node_id })).send().await.unwrap();
+    let rel1 = client
+        .post(format!("{base}/v1/forge/release"))
+        .json(&serde_json::json!({ "mission_id": "mission-idem", "node_id": node_id }))
+        .send()
+        .await
+        .unwrap();
+    let rel2 = client
+        .post(format!("{base}/v1/forge/release"))
+        .json(&serde_json::json!({ "mission_id": "mission-idem", "node_id": node_id }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(rel1.status().as_u16(), 200);
     assert_eq!(rel2.status().as_u16(), 200);
 }
@@ -459,14 +563,24 @@ async fn test_8_end_to_end_preemption_timings() {
         allow_preemption: true,
     };
     let t0 = Instant::now();
-    let _ = client.post(format!("{base}/v1/forge/reserve")).json(&res_req).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/v1/forge/reserve"))
+        .json(&res_req)
+        .send()
+        .await
+        .unwrap();
     let reserve_latency = t0.elapsed();
 
     assert!(state.preemption.is_node_reserved(node_id));
 
     // 2. Release
     let t1 = Instant::now();
-    let _ = client.post(format!("{base}/v1/forge/release")).json(&serde_json::json!({ "mission_id": "mission-timing", "node_id": node_id })).send().await.unwrap();
+    let _ = client
+        .post(format!("{base}/v1/forge/release"))
+        .json(&serde_json::json!({ "mission_id": "mission-timing", "node_id": node_id }))
+        .send()
+        .await
+        .unwrap();
     let release_latency = t1.elapsed();
 
     assert!(!state.preemption.is_node_reserved(node_id));

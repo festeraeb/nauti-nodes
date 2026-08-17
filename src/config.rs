@@ -21,6 +21,9 @@ pub struct Config {
     pub worker_role: String,
     pub worker_gpu: String,
     pub strict_alpha: bool,
+    pub protocol_version: u32,
+    pub external_alpha_enabled: bool,
+    pub is_external_alpha: bool,
 }
 
 impl Default for Config {
@@ -38,6 +41,9 @@ impl Default for Config {
             worker_role: "thinker".to_string(),
             worker_gpu: "RTX 2060 SUPER".to_string(),
             strict_alpha: true,
+            protocol_version: crate::node::auth::CURRENT_PROTOCOL_VERSION,
+            external_alpha_enabled: true,
+            is_external_alpha: true,
         }
     }
 }
@@ -92,6 +98,35 @@ impl Config {
                 _ => true,
             };
         }
+        if let Ok(v) = std::env::var("NAUTI_EXTERNAL_ALPHA_ENABLED") {
+            c.external_alpha_enabled = match v.to_lowercase().as_str() {
+                "0" | "false" | "no" | "off" => false,
+                _ => true,
+            };
+        }
+        if let Ok(v) = std::env::var("NAUTI_KILL_SWITCH") {
+            // NAUTI_KILL_SWITCH=1 disables external alpha
+            c.external_alpha_enabled = match v.to_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => false,
+                _ => true,
+            };
+        }
+        if let Ok(v) = std::env::var("NAUTI_IS_EXTERNAL_ALPHA") {
+            c.is_external_alpha = match v.to_lowercase().as_str() {
+                "0" | "false" | "no" | "off" => false,
+                _ => true,
+            };
+        }
         Ok(c)
+    }
+
+    /// Return a sanitized version of this config with private keys and credentials scrubbed.
+    pub fn sanitize(&self) -> Self {
+        let mut s = self.clone();
+        s.auth_keypair_path = "[REDACTED]".to_string();
+        if !s.db_url.starts_with("sqlite::memory:") {
+            s.db_url = "[REDACTED_DB_URL]".to_string();
+        }
+        s
     }
 }

@@ -123,7 +123,8 @@ pub async fn sync_fleet(registry: &NodeRegistry, client: &reqwest::Client, forge
                                 temperature_c: gpu.temperature_c.map(|t| t as u32),
                                 node_id: m.id.clone(),
                                 observer_node_id: "local".to_string(),
-                                source_type: crate::types::TelemetrySourceType::LocalLiveObservation,
+                                source_type:
+                                    crate::types::TelemetrySourceType::LocalLiveObservation,
                                 provider: "all-smi".to_string(),
                                 observed_at: Some(crate::types::now_ms()),
                                 received_at: Some(crate::types::now_ms()),

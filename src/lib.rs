@@ -3,6 +3,7 @@
 pub mod adapter;
 pub mod api;
 pub mod capabilities;
+pub mod cli;
 pub mod config;
 pub mod contribution;
 pub mod coordinator;

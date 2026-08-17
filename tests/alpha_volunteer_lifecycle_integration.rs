@@ -9,8 +9,7 @@ use nauti_nodes::{
     node::identity::NodeIdentity,
     state::AppState,
     types::{
-        now_ms, NodeLifecycleState, ObservedHardware,
-        ReconciliationStatus, TelemetrySourceType,
+        now_ms, NodeLifecycleState, ObservedHardware, ReconciliationStatus, TelemetrySourceType,
     },
 };
 use tempfile::NamedTempFile;
@@ -66,6 +65,7 @@ async fn test_1_valid_first_join() {
         models: vec!["thinker".into()],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
@@ -120,6 +120,7 @@ async fn test_3_invalid_identity_state() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: "00".repeat(64), // Invalid signature
     };
 
@@ -152,6 +153,7 @@ async fn test_4_duplicate_identity_protection() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req1.signature_hex = sign_message(&key1, &req1.canonical_message());
@@ -175,6 +177,7 @@ async fn test_4_duplicate_identity_protection() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req2.signature_hex = sign_message(&key2, &req2.canonical_message());
@@ -243,10 +246,15 @@ async fn test_6_reconnect_after_timeout() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await;
 
     // Simulate timeout / offline
     let rt = state.registry.get_node(&node_id).unwrap();
@@ -301,10 +309,15 @@ async fn test_7_graceful_withdrawal() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await;
 
     // Send withdraw request
     let mut wreq = SignedWithdrawRequest {
@@ -349,10 +362,15 @@ async fn test_8_rejoin_after_withdrawal() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req1.signature_hex = sign_message(&key, &req1.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req1).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req1)
+        .send()
+        .await;
 
     // 2. Withdraw
     let mut wreq = SignedWithdrawRequest {
@@ -362,7 +380,11 @@ async fn test_8_rejoin_after_withdrawal() {
         signature_hex: String::new(),
     };
     wreq.signature_hex = sign_message(&key, &wreq.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/withdraw")).json(&wreq).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/withdraw"))
+        .json(&wreq)
+        .send()
+        .await;
 
     // 3. Rejoin using same identity
     let mut req2 = SignedJoinRequest {
@@ -375,6 +397,7 @@ async fn test_8_rejoin_after_withdrawal() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req2.signature_hex = sign_message(&key, &req2.canonical_message());
@@ -413,10 +436,15 @@ async fn test_9_revoked_identity() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await;
 
     // Admin revokes node
     let rev_resp = client
@@ -459,6 +487,7 @@ async fn test_10_revoked_identity_attempting_restart() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
@@ -491,10 +520,15 @@ async fn test_11_hardware_changed_on_rejoin() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req1.signature_hex = sign_message(&key, &req1.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req1).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req1)
+        .send()
+        .await;
 
     // 2. Rejoin with updated hardware claim (e.g. 24GB RTX 3090)
     let mut req2 = SignedJoinRequest {
@@ -507,11 +541,16 @@ async fn test_11_hardware_changed_on_rejoin() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req2.signature_hex = sign_message(&key, &req2.canonical_message());
 
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req2).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req2)
+        .send()
+        .await;
 
     let rt = state.registry.get_node(&node_id).unwrap();
     let md = rt.metadata.read().unwrap();
@@ -558,6 +597,7 @@ async fn test_12_coordinator_restart_recovery() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
@@ -591,10 +631,15 @@ async fn test_13_withdrawn_node_cannot_receive_work() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await;
 
     let rt = state.registry.get_node(&node_id).unwrap();
     {
@@ -657,10 +702,15 @@ async fn test_14_draining_node_cannot_receive_work() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await;
 
     let rt = state.registry.get_node(&node_id).unwrap();
     {
@@ -721,10 +771,15 @@ async fn test_15_public_privacy_boundary_intact() {
         models: vec![],
         timestamp_secs: current_timestamp(),
         nonce: uuid::Uuid::new_v4().to_string(),
+        protocol_version: 1,
         signature_hex: String::new(),
     };
     req.signature_hex = sign_message(&key, &req.canonical_message());
-    let _ = client.post(format!("{base}/internal/worker/register")).json(&req).send().await;
+    let _ = client
+        .post(format!("{base}/internal/worker/register"))
+        .json(&req)
+        .send()
+        .await;
 
     let rt = state.registry.get_node(&node_id).unwrap();
     {

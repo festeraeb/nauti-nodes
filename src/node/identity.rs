@@ -76,18 +76,26 @@ impl NodeIdentity {
     /// Validate the structural and cryptographic integrity of this identity.
     pub fn validate(&self) -> crate::types::Result<()> {
         if uuid::Uuid::parse_str(&self.node_id).is_err() {
-            return Err(crate::types::Error::Internal("invalid UUID in node identity".into()));
+            return Err(crate::types::Error::Internal(
+                "invalid UUID in node identity".into(),
+            ));
         }
         if self.public_key.len() != 32 {
-            return Err(crate::types::Error::Internal("invalid public key length".into()));
+            return Err(crate::types::Error::Internal(
+                "invalid public key length".into(),
+            ));
         }
         if self.secret_key.len() != 32 {
-            return Err(crate::types::Error::Internal("invalid secret key length".into()));
+            return Err(crate::types::Error::Internal(
+                "invalid secret key length".into(),
+            ));
         }
         let signing_key = self.signing_key()?;
         let derived_pub = signing_key.verifying_key().to_bytes().to_vec();
         if derived_pub != self.public_key {
-            return Err(crate::types::Error::Internal("public/secret key mismatch".into()));
+            return Err(crate::types::Error::Internal(
+                "public/secret key mismatch".into(),
+            ));
         }
         Ok(())
     }

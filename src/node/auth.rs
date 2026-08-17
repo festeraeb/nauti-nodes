@@ -23,6 +23,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Maximum age for a signed request (5 minutes).
 const MAX_REQUEST_AGE_SECS: u64 = 300;
 
+/// Current supported protocol version.
+pub const CURRENT_PROTOCOL_VERSION: u32 = 1;
+
+/// Minimum supported protocol version.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
+
+fn default_protocol_version() -> u32 {
+    1
+}
+
 /// A signed join request from a node to the federation coordinator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedJoinRequest {
@@ -53,6 +63,10 @@ pub struct SignedJoinRequest {
     /// Unique nonce to prevent replay (UUID or random hex)
     pub nonce: String,
 
+    /// Protocol version supported by this node
+    #[serde(default = "default_protocol_version")]
+    pub protocol_version: u32,
+
     /// Ed25519 signature over the canonical message (hex-encoded)
     pub signature_hex: String,
 }
@@ -61,21 +75,47 @@ impl SignedJoinRequest {
     /// Build the canonical message that was signed.
     /// This must be deterministic and include all security-critical fields.
     pub fn canonical_message(&self) -> String {
-        format!(
-            "nauti-join:{}:{}:{}:{}:{}:{}:{}:{}",
-            self.node_id,
-            self.public_key_hex,
-            self.inference_url,
-            self.role,
-            self.gpu_name,
-            self.vram_mb,
-            self.timestamp_secs,
-            self.nonce,
-        )
+        if self.protocol_version <= 1 {
+            format!(
+                "nauti-join:{}:{}:{}:{}:{}:{}:{}:{}",
+                self.node_id,
+                self.public_key_hex,
+                self.inference_url,
+                self.role,
+                self.gpu_name,
+                self.vram_mb,
+                self.timestamp_secs,
+                self.nonce,
+            )
+        } else {
+            format!(
+                "nauti-join:v{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                self.protocol_version,
+                self.node_id,
+                self.public_key_hex,
+                self.inference_url,
+                self.role,
+                self.gpu_name,
+                self.vram_mb,
+                self.timestamp_secs,
+                self.nonce,
+            )
+        }
     }
 
     /// Verify the signature and timestamp of this join request.
     pub fn verify(&self, nonce_tracker: &NonceTracker) -> Result<(), AuthError> {
+        // 0. Check protocol version compatibility
+        if self.protocol_version < MIN_SUPPORTED_PROTOCOL_VERSION
+            || self.protocol_version > CURRENT_PROTOCOL_VERSION
+        {
+            return Err(AuthError::IncompatibleProtocolVersion {
+                version: self.protocol_version,
+                min: MIN_SUPPORTED_PROTOCOL_VERSION,
+                max: CURRENT_PROTOCOL_VERSION,
+            });
+        }
+
         // 1. Check timestamp freshness
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -247,6 +287,11 @@ pub enum AuthError {
     InvalidPublicKey,
     InvalidSignature,
     SignatureMismatch,
+    IncompatibleProtocolVersion {
+        version: u32,
+        min: u32,
+        max: u32,
+    },
 }
 
 impl std::fmt::Display for AuthError {
@@ -264,6 +309,10 @@ impl std::fmt::Display for AuthError {
             Self::InvalidPublicKey => write!(f, "invalid public key"),
             Self::InvalidSignature => write!(f, "invalid signature format"),
             Self::SignatureMismatch => write!(f, "signature verification failed"),
+            Self::IncompatibleProtocolVersion { version, min, max } => write!(
+                f,
+                "incompatible protocol version {version}: supported range is {min}..={max}"
+            ),
         }
     }
 }
@@ -331,6 +380,7 @@ mod tests {
             models: vec!["thinker".into()],
             timestamp_secs: current_timestamp(),
             nonce: uuid::Uuid::new_v4().to_string(),
+            protocol_version: 1,
             signature_hex: String::new(),
         };
 
@@ -356,6 +406,7 @@ mod tests {
             models: vec![],
             timestamp_secs: current_timestamp() - 600, // 10 minutes ago
             nonce: uuid::Uuid::new_v4().to_string(),
+            protocol_version: 1,
             signature_hex: String::new(),
         };
         req.signature_hex = sign_message(&key, &req.canonical_message());
@@ -385,6 +436,7 @@ mod tests {
             models: vec![],
             timestamp_secs: current_timestamp(),
             nonce: nonce.clone(),
+            protocol_version: 1,
             signature_hex: String::new(),
         };
         req.signature_hex = sign_message(&key, &req.canonical_message());
@@ -427,6 +479,7 @@ mod tests {
             models: vec![],
             timestamp_secs: current_timestamp(),
             nonce: uuid::Uuid::new_v4().to_string(),
+            protocol_version: 1,
             signature_hex: String::new(),
         };
         req.signature_hex = sign_message(&key, &req.canonical_message());

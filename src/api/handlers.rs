@@ -477,9 +477,19 @@ pub async fn worker_register(
     Json(req): Json<SignedJoinRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     use crate::node::auth::AuthError;
+
+    // Check operator kill switch
+    if !state.external_alpha_enabled.load(Ordering::Relaxed) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "external alpha joins disabled by operator kill switch".into(),
+        ));
+    }
+
     req.verify(&state.nonce_tracker).map_err(|e| match &e {
         AuthError::StaleRequest { .. } => (StatusCode::FORBIDDEN, e.to_string()),
         AuthError::ReplayedNonce(_) => (StatusCode::CONFLICT, e.to_string()),
+        AuthError::IncompatibleProtocolVersion { .. } => (StatusCode::BAD_REQUEST, e.to_string()),
         _ => (StatusCode::UNAUTHORIZED, e.to_string()),
     })?;
 
@@ -487,7 +497,10 @@ pub async fn worker_register(
     if state.revocations.is_revoked(&req.node_id)
         || state.revocations.is_revoked(&req.public_key_hex)
     {
-        return Err((StatusCode::FORBIDDEN, "node identity is revoked".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "node identity is revoked".to_string(),
+        ));
     }
 
     // Check duplicate node ID with different public key
@@ -578,7 +591,10 @@ pub async fn worker_heartbeat(
             md.health_state = "REVOKED".to_string();
             md.lifecycle_state = crate::types::NodeLifecycleState::Revoked;
         }
-        return Err((StatusCode::FORBIDDEN, "node identity is revoked".to_string()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "node identity is revoked".to_string(),
+        ));
     }
 
     let now = std::time::SystemTime::now()
@@ -620,7 +636,10 @@ pub async fn worker_heartbeat(
         let observed =
             fetch_observed_hardware(&state.http, &state.config.forge_url, &req.node_id).await;
         if let Ok(mut md) = rt.metadata.write() {
-            if md.health_state != "WITHDRAWN" && md.health_state != "DRAINING" && md.health_state != "REVOKED" {
+            if md.health_state != "WITHDRAWN"
+                && md.health_state != "DRAINING"
+                && md.health_state != "REVOKED"
+            {
                 md.online = true;
                 md.health_state = "ONLINE".to_string();
                 md.lifecycle_state = crate::types::NodeLifecycleState::Online;
@@ -631,7 +650,10 @@ pub async fn worker_heartbeat(
         }
     } else {
         if let Ok(mut md) = rt.metadata.write() {
-            if md.health_state != "WITHDRAWN" && md.health_state != "DRAINING" && md.health_state != "REVOKED" {
+            if md.health_state != "WITHDRAWN"
+                && md.health_state != "DRAINING"
+                && md.health_state != "REVOKED"
+            {
                 md.online = true;
                 md.health_state = "ONLINE".to_string();
                 md.lifecycle_state = crate::types::NodeLifecycleState::Online;
@@ -928,7 +950,10 @@ pub async fn model_start(
                 ) {
                     return Err((
                         StatusCode::FORBIDDEN,
-                        format!("node lifecycle state '{:?}' prohibits starting model", md.lifecycle_state),
+                        format!(
+                            "node lifecycle state '{:?}' prohibits starting model",
+                            md.lifecycle_state
+                        ),
                     ));
                 }
             }
@@ -971,9 +996,7 @@ pub async fn model_stop(
     Ok(Json(serde_json::json!({ "stopped": true })))
 }
 
-pub async fn model_status(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+pub async fn model_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let status = state.model_manager.get_status();
     Json(serde_json::to_value(status).unwrap_or_default())
 }
@@ -1040,8 +1063,15 @@ pub async fn forge_release(
             resumed_count = state.preemption.resume_checkpointed(&req.node_id);
 
             // Attempt to restore shared model runtime if configured
-            let model_to_start = if current_model.is_empty() { "thinker" } else { &current_model };
-            let _ = state.model_manager.request_model(model_to_start, 5200, 16384).await;
+            let model_to_start = if current_model.is_empty() {
+                "thinker"
+            } else {
+                &current_model
+            };
+            let _ = state
+                .model_manager
+                .request_model(model_to_start, 5200, 16384)
+                .await;
         }
     }
 
@@ -1058,4 +1088,31 @@ pub async fn forge_release(
 pub async fn list_forge_reservations(State(state): State<AppState>) -> Json<serde_json::Value> {
     let res = state.preemption.list_reservations();
     Json(serde_json::to_value(res).unwrap_or_default())
+}
+
+pub async fn admin_disable_external_alpha(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    state.external_alpha_enabled.store(false, Ordering::Relaxed);
+    info!("operator kill switch engaged: external alpha disabled");
+    Json(serde_json::json!({
+        "external_alpha_enabled": false,
+        "status": "disabled"
+    }))
+}
+
+pub async fn admin_enable_external_alpha(State(state): State<AppState>) -> Json<serde_json::Value> {
+    state.external_alpha_enabled.store(true, Ordering::Relaxed);
+    info!("operator kill switch disengaged: external alpha enabled");
+    Json(serde_json::json!({
+        "external_alpha_enabled": true,
+        "status": "enabled"
+    }))
+}
+
+pub async fn admin_kill_switch_status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let enabled = state.external_alpha_enabled.load(Ordering::Relaxed);
+    Json(serde_json::json!({
+        "external_alpha_enabled": enabled
+    }))
 }
