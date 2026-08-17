@@ -181,6 +181,8 @@ async fn test_1_idle_preemption_excludes_node() {
         vram_mb: 24576,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
     let res_resp = client
         .post(format!("{base}/v1/forge/reserve"))
@@ -220,6 +222,8 @@ async fn test_2_ready_runtime_preemption() {
         vram_mb: 16384,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
     let _ = client
         .post(format!("{base}/v1/forge/reserve"))
@@ -252,6 +256,8 @@ async fn test_3_active_job_checkpointed() {
         vram_mb: 16384,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
 
     let resp = client
@@ -331,6 +337,8 @@ async fn test_4_release_and_recovery() {
         vram_mb: 24576,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
     let _ = client
         .post(format!("{base}/v1/forge/reserve"))
@@ -380,6 +388,8 @@ async fn test_5_revoked_node_no_recovery_on_release() {
         vram_mb: 16384,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
     let _ = client
         .post(format!("{base}/v1/forge/reserve"))
@@ -451,6 +461,8 @@ async fn test_6_withdrawn_node_no_recovery_on_release() {
         vram_mb: 24576,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
     let _ = client
         .post(format!("{base}/v1/forge/reserve"))
@@ -508,6 +520,8 @@ async fn test_7_idempotent_reservation_and_release() {
         vram_mb: 16384,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
 
     // Duplicate reservations
@@ -561,6 +575,8 @@ async fn test_8_end_to_end_preemption_timings() {
         vram_mb: 16384,
         priority: 100,
         allow_preemption: true,
+        lease_id: None,
+        device_id: None,
     };
     let t0 = Instant::now();
     let _ = client

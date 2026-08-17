@@ -415,6 +415,176 @@ pub fn run_bundle(config: &Config, output_path: Option<&str>) -> Result<String, 
     Ok(target_path.to_string())
 }
 
+/// Chunk 7: operator fleet status (human-readable table or JSON).
+/// Queries the coordinator's admin-authenticated /v1/operator/fleet endpoint.
+pub async fn run_fleet(config: &Config, json_output: bool) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v1/operator/fleet",
+        config.coordinator_url.trim_end_matches('/')
+    );
+    let mut req = client.get(&url);
+    if let Ok(key) = std::env::var("NAUTI_ADMIN_KEY") {
+        req = req.header("X-Admin-Key", key);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("fleet status request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "coordinator returned HTTP {} for fleet status",
+            resp.status()
+        ));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse fleet status failed: {e}"))?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&body).unwrap());
+        return Ok(());
+    }
+
+    println!("============================================================");
+    println!("NAUTI NODES OPERATOR FLEET STATUS");
+    println!("============================================================");
+    println!(
+        "{:<24} {:<18} {:<12} {:<16} {:<10}",
+        "NODE", "GPU", "STATE", "OWNER", "MODEL"
+    );
+    for node in body["nodes"].as_array().cloned().unwrap_or_default() {
+        let node_id = node["node_id"].as_str().unwrap_or("?");
+        let short_id = if node_id.len() > 22 {
+            &node_id[..22]
+        } else {
+            node_id
+        };
+        let gpu = node["gpu_name"].as_str().unwrap_or("?");
+        let short_gpu = if gpu.len() > 16 { &gpu[..16] } else { gpu };
+        let state = if node["online"].as_bool().unwrap_or(false) {
+            node["health_state"].as_str().unwrap_or("?")
+        } else {
+            node["health_state"].as_str().unwrap_or("OFFLINE")
+        };
+        let owner = match node["ownership"].as_str().unwrap_or("?") {
+            "FORGE_LEASED" => "FORGE",
+            "SHARED_AVAILABLE" | "SHARED_ASSIGNED" => "SHARED",
+            "DRAINING" | "RECOVERING" => "TRANSITION",
+            _ => "NONE",
+        };
+        let model = node["models"]
+            .as_array()
+            .and_then(|m| m.first())
+            .and_then(|m| m.as_str())
+            .unwrap_or("-");
+        let short_model = if model.len() > 8 { &model[..8] } else { model };
+        println!(
+            "{:<24} {:<18} {:<12} {:<16} {:<10}",
+            short_id, short_gpu, state, owner, short_model
+        );
+    }
+
+    if let Some(leases) = body["leases"].as_array() {
+        let active: Vec<&serde_json::Value> = leases
+            .iter()
+            .filter(|l| {
+                matches!(
+                    l["state"].as_str().unwrap_or(""),
+                    "LEASE_REQUESTED"
+                        | "DRAINING"
+                        | "LEASE_GRANTED"
+                        | "LEASED"
+                        | "RELEASING"
+                        | "RECOVERING"
+                )
+            })
+            .collect();
+        if !active.is_empty() {
+            println!("\nACTIVE LEASES");
+            for l in active {
+                println!("------------------------------------------------------------");
+                println!("lease:    {}", l["lease_id"].as_str().unwrap_or("?"));
+                println!("mission:  {}", l["mission_id"].as_str().unwrap_or("?"));
+                println!("node:     {}", l["node_id"].as_str().unwrap_or("?"));
+                println!("state:    {}", l["state"].as_str().unwrap_or("?"));
+                if let Some(g) = l["granted_at_ms"].as_u64() {
+                    println!("granted:  {g}");
+                }
+            }
+        }
+    }
+    if let Some(summary) = body.get("summary") {
+        println!("------------------------------------------------------------");
+        println!(
+            "nodes: {}  eligible: {}  active leases: {}",
+            summary["nodes_total"], summary["eligible_for_shared_work"], summary["active_leases"]
+        );
+    }
+    Ok(())
+}
+
+/// Chunk 7: operator event history ("why isn't this GPU available?").
+pub async fn run_events(
+    config: &Config,
+    node: Option<&str>,
+    lease: Option<&str>,
+    kind: Option<&str>,
+    limit: u64,
+    json_output: bool,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let mut url = format!(
+        "{}/v1/operator/events?limit={}",
+        config.coordinator_url.trim_end_matches('/'),
+        limit
+    );
+    if let Some(n) = node {
+        url.push_str(&format!("&node={n}"));
+    }
+    if let Some(l) = lease {
+        url.push_str(&format!("&lease={l}"));
+    }
+    if let Some(k) = kind {
+        url.push_str(&format!("&kind={k}"));
+    }
+    let mut req = client.get(&url);
+    if let Ok(key) = std::env::var("NAUTI_ADMIN_KEY") {
+        req = req.header("X-Admin-Key", key);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("events request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "coordinator returned HTTP {} for event history",
+            resp.status()
+        ));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse events failed: {e}"))?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&body).unwrap());
+        return Ok(());
+    }
+    for ev in body["events"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "[{}] {:<28} node={:<22} lease={:<12} {}",
+            ev["ts_ms"],
+            ev["kind"].as_str().unwrap_or("?"),
+            ev["node_id"].as_str().unwrap_or("-"),
+            ev["lease_id"].as_str().unwrap_or("-"),
+            ev["detail"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
 fn which_exists(cmd: &str) -> bool {
     std::process::Command::new("which")
         .arg(cmd)

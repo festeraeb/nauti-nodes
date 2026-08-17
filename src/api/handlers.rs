@@ -1,13 +1,16 @@
 use crate::adapter::llama::ChatMessage;
 use crate::config::Config;
+use crate::eligibility::RuntimeState;
 use crate::fleet;
 use crate::job_runner;
 use crate::jobs::JobRecord;
 use crate::node::auth::{SignedHeartbeat, SignedJoinRequest};
+use crate::opsstore::OpsEventKind;
+use crate::preemption::PreemptibleJob;
 use crate::state::AppState;
-use crate::types::{NodeMetadata, NodeStatistics};
+use crate::types::{now_ms, NodeMetadata, NodeStatistics, ReconciliationStatus};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -173,27 +176,64 @@ pub async fn inference(
         }
     }
 
+    state
+        .metrics
+        .inference_requests_total
+        .fetch_add(1, Ordering::Relaxed);
+
+    // Chunk 7 work-vs-lease race guard: confirm the assignment atomically
+    // against the authoritative eligibility state. If a Forge lease was
+    // granted (or the node otherwise became ineligible) between selection
+    // and this call, the assignment is REFUSED. Fail closed.
+    if !rt.try_assign() {
+        state
+            .metrics
+            .ownership_conflicts_blocked_total
+            .fetch_add(1, Ordering::Relaxed);
+        let blocked_node = rt.metadata.read().map(|m| m.id.clone()).unwrap_or_default();
+        let _ = state.ops.record(
+            OpsEventKind::OwnershipConflictBlocked,
+            Some(&blocked_node),
+            None,
+            None,
+            None,
+            "shared assignment refused at confirm time (ownership fail closed)",
+            "BLOCKED",
+        );
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "node became ineligible during assignment (ownership fail closed)".to_string(),
+        ));
+    }
+
     // Phase 4: API key + credit ledger reservation.
-    let api_key = extract_api_key(&headers).ok_or((
-        StatusCode::UNAUTHORIZED,
-        "missing API key (set X-API-Key header or Authorization: Bearer <key>)".to_string(),
-    ))?;
+    let api_key = match extract_api_key(&headers) {
+        Some(k) => k,
+        None => {
+            rt.release_assignment();
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "missing API key (set X-API-Key header or Authorization: Bearer <key>)".to_string(),
+            ));
+        }
+    };
 
     let reserve_tokens = req.max_tokens.unwrap_or(512) as u64;
     if reserve_tokens == 0 {
+        rt.release_assignment();
         return Err((
             StatusCode::BAD_REQUEST,
             "max_tokens must be > 0".to_string(),
         ));
     }
-    state
-        .scheduler
-        .check_quota(&api_key, reserve_tokens)
-        .map_err(|e| (StatusCode::PAYMENT_REQUIRED, e.to_string()))?;
-    state
-        .scheduler
-        .reserve_tokens(&api_key, reserve_tokens)
-        .map_err(|e| (StatusCode::PAYMENT_REQUIRED, e.to_string()))?;
+    if let Err(e) = state.scheduler.check_quota(&api_key, reserve_tokens) {
+        rt.release_assignment();
+        return Err((StatusCode::PAYMENT_REQUIRED, e.to_string()));
+    }
+    if let Err(e) = state.scheduler.reserve_tokens(&api_key, reserve_tokens) {
+        rt.release_assignment();
+        return Err((StatusCode::PAYMENT_REQUIRED, e.to_string()));
+    }
 
     let (node_id, inference_url, model, role) = {
         let md = rt
@@ -233,12 +273,24 @@ pub async fn inference(
         done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     state.jobs.insert(job_id.clone(), record.clone());
+    // Chunk 7: register the live job as preemptible and open its accounting
+    // ledger row (duplicate-open guard keyed by job_id).
+    state
+        .preemption
+        .register_job(PreemptibleJob::new(job_id.clone(), node_id.clone(), true));
+    let _ = state
+        .ops
+        .open_reservation(&job_id, &api_key, reserve_tokens);
     job_runner::spawn_job(
         state.http.clone(),
         state.jobs.clone(),
         job_id.clone(),
         record.clone(),
         state.scheduler.clone(),
+        Some(rt.clone()),
+        state.ops.clone(),
+        state.preemption.clone(),
+        state.metrics.clone(),
     );
 
     if !req.stream {
@@ -556,11 +608,15 @@ pub async fn worker_register(
         last_hardware_probe: None,
         health_state: "ONLINE".to_string(),
         lifecycle_state: crate::types::NodeLifecycleState::Online,
+        // Signed volunteer workers assert their own runtime truth via
+        // heartbeats (RC1 protocol). Chunk 7 default: Ready.
+        ..Default::default()
     };
 
     reconcile_node(&state.http, &state.config.forge_url, &mut meta).await;
 
-    if state.registry.get_node(&req.node_id).is_some() {
+    let existed = state.registry.get_node(&req.node_id).is_some();
+    if existed {
         if let Some(rt) = state.registry.get_node(&req.node_id) {
             if let Ok(mut md) = rt.metadata.write() {
                 *md = meta;
@@ -569,7 +625,65 @@ pub async fn worker_register(
     } else {
         state.registry.register_node(meta);
     }
-    Ok(Json(serde_json::json!({ "registered": req.node_id })))
+
+    // Chunk 7: hardware reconciliation event (fresh observation on join).
+    let rec_status = state
+        .registry
+        .get_node(&req.node_id)
+        .and_then(|rt| rt.metadata.read().ok().map(|m| m.reconciliation.status));
+    let rec_result = rec_status
+        .map(|s| format!("{s:?}"))
+        .unwrap_or_else(|| "UNVERIFIED".into());
+    let _ = state.ops.record(
+        if rec_status == Some(ReconciliationStatus::MISMATCH) {
+            OpsEventKind::HardwareMismatch
+        } else {
+            OpsEventKind::HardwareReconciled
+        },
+        Some(&req.node_id),
+        None,
+        None,
+        None,
+        &format!(
+            "join reconciliation: {:?}",
+            rec_status.unwrap_or(ReconciliationStatus::UNVERIFIED)
+        ),
+        &rec_result,
+    );
+
+    // Chunk 7: active Forge lease truth overrides rejoin. A worker
+    // reconnecting while its GPU is leased must NOT re-enter the shared pool.
+    let leased = state
+        .leases
+        .apply_overlay_to_node(&state.registry, &req.node_id);
+
+    if let Some(rt) = state.registry.get_node(&req.node_id) {
+        let _ = state.ops.record(
+            if existed {
+                OpsEventKind::NodeReconnected
+            } else {
+                OpsEventKind::NodeJoined
+            },
+            Some(&req.node_id),
+            None,
+            None,
+            None,
+            &format!("signed join protocol v{}", req.protocol_version),
+            if leased { "RESERVED_FORGE" } else { "ONLINE" },
+        );
+        if existed {
+            state
+                .metrics
+                .node_reconnects_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        crate::state::persist_node(&state.ops, &rt);
+    }
+
+    Ok(Json(serde_json::json!({
+        "registered": req.node_id,
+        "leased": leased
+    })))
 }
 
 pub async fn worker_heartbeat(
@@ -623,6 +737,37 @@ pub async fn worker_heartbeat(
         ..Default::default()
     });
 
+    // Chunk 7: worker-reported runtime truth. An RC1 worker whose local
+    // inference runtime is down heartbeats free_vram_mb == 0 and
+    // tokens_per_sec == 0. An open heartbeat is NOT proof of runtime health.
+    let runtime_down = req.free_vram_mb == 0 && req.tokens_per_sec == 0.0;
+
+    // Chunk 7 invariant: a heartbeat must NEVER resurrect a leased GPU into
+    // the shared pool. Lease truth wins over liveness.
+    if state.leases.has_active_lease(&req.node_id) {
+        if let Ok(mut md) = rt.metadata.write() {
+            if runtime_down {
+                md.runtime_state = RuntimeState::Unavailable;
+            }
+        }
+        let _ = state.ops.record(
+            OpsEventKind::OwnershipConflictBlocked,
+            Some(&req.node_id),
+            None,
+            None,
+            None,
+            "heartbeat while Forge lease active: node kept excluded from shared pool",
+            "RESERVED_FORGE",
+        );
+        return Ok(Json(serde_json::json!({ "ok": true, "leased": true })));
+    }
+
+    let prev_health = rt
+        .metadata
+        .read()
+        .map(|m| m.health_state.clone())
+        .unwrap_or_default();
+
     let needs_reconcile = {
         if let Ok(md) = rt.metadata.read() {
             let elapsed = md
@@ -642,6 +787,8 @@ pub async fn worker_heartbeat(
             if md.health_state != "WITHDRAWN"
                 && md.health_state != "DRAINING"
                 && md.health_state != "REVOKED"
+                && md.health_state != "RESERVED_FORGE"
+                && md.health_state != "PREEMPTING"
             {
                 md.online = true;
                 md.health_state = "ONLINE".to_string();
@@ -651,18 +798,67 @@ pub async fn worker_heartbeat(
             md.last_hardware_probe = Some(crate::types::now_ms());
             md.reconciliation = crate::types::reconcile_claim(&md.claim, &md.observed);
         }
-    } else {
-        if let Ok(mut md) = rt.metadata.write() {
-            if md.health_state != "WITHDRAWN"
-                && md.health_state != "DRAINING"
-                && md.health_state != "REVOKED"
-            {
-                md.online = true;
-                md.health_state = "ONLINE".to_string();
-                md.lifecycle_state = crate::types::NodeLifecycleState::Online;
+    } else if let Ok(mut md) = rt.metadata.write() {
+        if md.health_state != "WITHDRAWN"
+            && md.health_state != "DRAINING"
+            && md.health_state != "REVOKED"
+            && md.health_state != "RESERVED_FORGE"
+            && md.health_state != "PREEMPTING"
+        {
+            md.online = true;
+            md.health_state = "ONLINE".to_string();
+            md.lifecycle_state = crate::types::NodeLifecycleState::Online;
+        }
+    }
+
+    // Chunk 7: runtime truth, reconnect detection, persistence.
+    let mut reconnected = false;
+    if let Ok(mut md) = rt.metadata.write() {
+        if runtime_down {
+            if md.runtime_state != RuntimeState::Unavailable {
+                state
+                    .metrics
+                    .runtime_failures_total
+                    .fetch_add(1, Ordering::Relaxed);
+                let _ = state.ops.record(
+                    OpsEventKind::RuntimeFailed,
+                    Some(&req.node_id),
+                    None,
+                    None,
+                    None,
+                    "worker heartbeat reports runtime down",
+                    "RUNTIME_UNAVAILABLE",
+                );
+            }
+            md.runtime_state = RuntimeState::Unavailable;
+            md.failure_reason = "runtime down (worker-reported)".to_string();
+        } else {
+            md.runtime_state = RuntimeState::Ready;
+            md.failure_reason = String::new();
+        }
+        if prev_health != md.health_state {
+            md.last_state_change_ms = now_ms();
+            if md.health_state == "ONLINE" && (prev_health == "OFFLINE" || prev_health == "STALE") {
+                reconnected = true;
             }
         }
     }
+    if reconnected {
+        state
+            .metrics
+            .node_reconnects_total
+            .fetch_add(1, Ordering::Relaxed);
+        let _ = state.ops.record(
+            OpsEventKind::NodeReconnected,
+            Some(&req.node_id),
+            None,
+            None,
+            None,
+            "worker reconnected via signed heartbeat",
+            "ONLINE",
+        );
+    }
+    crate::state::persist_node(&state.ops, &rt);
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -712,16 +908,44 @@ pub async fn admin_revoke(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     for rt in state.registry.list_nodes() {
-        if let Ok(mut md) = rt.metadata.write() {
-            let pub_hex = hex::encode(&md.public_key);
-            if md.id == req.identifier || pub_hex == req.identifier {
-                md.online = false;
-                md.health_state = "REVOKED".to_string();
-                md.lifecycle_state = crate::types::NodeLifecycleState::Revoked;
-                md.reconciliation.status = crate::types::ReconciliationStatus::OFFLINE;
+        let matched = {
+            let mut matched = false;
+            if let Ok(mut md) = rt.metadata.write() {
+                let pub_hex = hex::encode(&md.public_key);
+                if md.id == req.identifier || pub_hex == req.identifier {
+                    md.online = false;
+                    md.health_state = "REVOKED".to_string();
+                    md.lifecycle_state = crate::types::NodeLifecycleState::Revoked;
+                    md.reconciliation.status = crate::types::ReconciliationStatus::OFFLINE;
+                    md.last_state_change_ms = now_ms();
+                    md.failure_reason = format!("revoked: {}", req.reason);
+                    matched = true;
+                }
             }
+            matched
+        };
+        if matched {
+            let _ = state.ops.record(
+                OpsEventKind::RevocationApplied,
+                Some(&req.identifier),
+                None,
+                None,
+                None,
+                &req.reason,
+                "REVOKED",
+            );
+            crate::state::persist_node(&state.ops, &rt);
         }
     }
+    let _ = state.ops.record(
+        OpsEventKind::NodeRevoked,
+        Some(&req.identifier),
+        None,
+        None,
+        None,
+        &req.reason,
+        "REVOKED",
+    );
 
     Ok(Json(serde_json::json!({
         "revoked": req.identifier,
@@ -739,6 +963,15 @@ pub async fn admin_unrevoke(
         .revocations
         .unrevoke(&req.identifier)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = state.ops.record(
+        OpsEventKind::NodeUnrevoked,
+        Some(&req.identifier),
+        None,
+        None,
+        None,
+        "revocation lifted by operator",
+        "UNREVOKED",
+    );
 
     Ok(Json(serde_json::json!({
         "unrevoked": req.identifier,
@@ -748,7 +981,9 @@ pub async fn admin_unrevoke(
 
 pub async fn list_revocations(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
     let list = state
         .revocations
         .list_revoked()
@@ -794,7 +1029,18 @@ pub async fn worker_withdraw(
         md.health_state = "WITHDRAWN".to_string();
         md.lifecycle_state = crate::types::NodeLifecycleState::Withdrawn;
         md.reconciliation.status = crate::types::ReconciliationStatus::OFFLINE;
+        md.last_state_change_ms = now_ms();
     }
+    let _ = state.ops.record(
+        OpsEventKind::NodeWithdrawn,
+        Some(&req.node_id),
+        None,
+        None,
+        None,
+        "graceful signed withdrawal",
+        "WITHDRAWN",
+    );
+    crate::state::persist_node(&state.ops, &rt);
 
     info!(node_id = %req.node_id, "node gracefully withdrawn");
     Ok(Json(serde_json::json!({ "withdrawn": req.node_id })))
@@ -1047,20 +1293,204 @@ pub async fn forge_reserve(
     Json(req): Json<crate::preemption::ForgeReservationRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     check_admin_auth(&headers, &state.config)?;
+    state
+        .metrics
+        .lease_requests_total
+        .fetch_add(1, Ordering::Relaxed);
+
+    // 1. Authoritative lease decision (Chunk 7 state machine).
+    //    Idempotent for the same (mission_id, node_id); a DIFFERENT mission
+    //    attempting to claim an already-leased GPU fails explicitly (409).
+    let outcome = state
+        .leases
+        .begin_reserve(
+            &req.mission_id,
+            &req.node_id,
+            req.lease_id.as_deref(),
+            req.device_id.as_deref(),
+            req.vram_mb,
+            req.priority,
+            req.allow_preemption,
+        )
+        .map_err(|e| match &e {
+            crate::lease::LeaseError::Conflict(holder) => {
+                state
+                    .metrics
+                    .lease_conflicts_total
+                    .fetch_add(1, Ordering::Relaxed);
+                (
+                    StatusCode::CONFLICT,
+                    format!(
+                        "GPU already leased: lease_id={} mission_id={} state={}",
+                        holder.lease_id,
+                        holder.mission_id,
+                        holder.state.as_str()
+                    ),
+                )
+            }
+            other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        })?;
+
+    let (lease, is_new) = match outcome {
+        crate::lease::ReserveOutcome::Created(l) => (l, true),
+        crate::lease::ReserveOutcome::Idempotent(l) => (l, false),
+    };
+    let lease_id = lease.lease_id.clone();
+
+    if !is_new {
+        // Duplicate reserve for the same lease: idempotent 200, no re-drain.
+        return Ok(Json(serde_json::json!({
+            "released": false,
+            "jobs_preempted": 0,
+            "jobs_checkpointed": 0,
+            "jobs_killed": 0,
+            "vram_released_mb": 0,
+            "preempted_jobs": [],
+            "idempotent": true,
+            "lease_id": lease.lease_id,
+            "mission_id": lease.mission_id,
+            "node_id": lease.node_id,
+            "lease_state": lease.state.as_str(),
+        })));
+    }
+
+    // 2. SCHEDULER EXCLUSION: atomically remove the node from the shared
+    //    pool BEFORE drain completes. From this instant no shared work can
+    //    be confirmed on the GPU (try_assign fails closed).
     if let Some(rt) = state.registry.get_node(&req.node_id) {
         if let Ok(mut md) = rt.metadata.write() {
             md.online = false;
             md.health_state = "RESERVED_FORGE".to_string();
+            md.last_state_change_ms = now_ms();
         }
     }
+    let lease = state
+        .leases
+        .mark_scheduler_excluded(&lease_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state.leases.sync_lease_ref_on_node(&state.registry, &lease);
 
+    // 3. DRAIN: checkpoint/preempt registered shared jobs on the node.
     let result = state.preemption.handle_reservation(&req);
+    for job_id in &result.preempted_jobs {
+        state
+            .metrics
+            .jobs_preempted_total
+            .fetch_add(1, Ordering::Relaxed);
+        // Stop live inference jobs and refund their reservations exactly once.
+        if let Some(record) = state.jobs.get(job_id) {
+            record.cancelled.store(true, Ordering::Relaxed);
+            record.done.store(true, Ordering::Relaxed);
+            let refund = record.reserved_tokens;
+            if let Some(key) = record.api_key.as_deref() {
+                let settled = state
+                    .ops
+                    .settle_reservation(job_id, 0, refund, "PREEMPTED")
+                    .unwrap_or(false);
+                if settled && refund > 0 {
+                    let _ = state.scheduler.release_tokens(key, refund);
+                    let _ = state.ops.record(
+                        OpsEventKind::AccountingRefunded,
+                        Some(&req.node_id),
+                        Some(&lease_id),
+                        Some(job_id),
+                        Some(&req.mission_id),
+                        &format!("preempted job refunded {refund} tokens"),
+                        "PREEMPTED",
+                    );
+                }
+            }
+            state.jobs.remove(job_id);
+            let _ = state.ops.record(
+                OpsEventKind::JobPreempted,
+                Some(&req.node_id),
+                Some(&lease_id),
+                Some(job_id),
+                Some(&req.mission_id),
+                "live shared job stopped for Forge lease",
+                "PREEMPTED",
+            );
+        }
+        // Checkpoint registry row (job / node / lease / mission association).
+        let cp_ref = format!("checkpoint-{job_id}");
+        let _ = state.ops.record_checkpoint(
+            job_id,
+            &req.node_id,
+            Some(&lease_id),
+            Some(&req.mission_id),
+            &cp_ref,
+            "{}",
+        );
+        let _ = state.ops.record(
+            OpsEventKind::JobCheckpointed,
+            Some(&req.node_id),
+            Some(&lease_id),
+            Some(job_id),
+            Some(&req.mission_id),
+            &cp_ref,
+            "CHECKPOINTED",
+        );
+    }
 
-    // Yield local model runtime process cleanly
+    // 4. RUNTIME EXIT: yield the local model runtime process cleanly.
     let _ = state.model_manager.stop_model().await;
+    let exited_lease = state
+        .leases
+        .mark_runtime_exited(&lease_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .leases
+        .sync_lease_ref_on_node(&state.registry, &exited_lease);
+    if let Some(rt) = state.registry.get_node(&req.node_id) {
+        if let Ok(mut md) = rt.metadata.write() {
+            md.runtime_state = RuntimeState::Unavailable;
+        }
+    }
+    let _lease = state
+        .leases
+        .mark_gpu_released(&lease_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    info!(mission_id = %req.mission_id, node_id = %req.node_id, jobs_preempted = result.jobs_preempted, "Forge GPU reservation handled");
-    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+    // 5. LEASE GRANTED — only now, because Nauti has ACTUALLY yielded
+    //    ownership (scheduler excluded, shared work stopped, runtime out).
+    let lease = state
+        .leases
+        .grant(&lease_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state.leases.sync_lease_ref_on_node(&state.registry, &lease);
+    state
+        .metrics
+        .leases_granted_total
+        .fetch_add(1, Ordering::Relaxed);
+    state
+        .metrics
+        .preemptions_total
+        .fetch_add(result.jobs_preempted as u64, Ordering::Relaxed);
+
+    if let Some(rt) = state.registry.get_node(&req.node_id) {
+        crate::state::persist_node(&state.ops, &rt);
+    }
+
+    info!(
+        lease_id = %lease_id,
+        mission_id = %req.mission_id,
+        node_id = %req.node_id,
+        jobs_preempted = result.jobs_preempted,
+        "Forge GPU lease granted (ownership yielded)"
+    );
+    Ok(Json(serde_json::json!({
+        "released": result.released,
+        "jobs_preempted": result.jobs_preempted,
+        "jobs_checkpointed": result.jobs_checkpointed,
+        "jobs_killed": result.jobs_killed,
+        "vram_released_mb": result.vram_released_mb,
+        "preempted_jobs": result.preempted_jobs,
+        "lease_id": lease.lease_id,
+        "mission_id": lease.mission_id,
+        "node_id": lease.node_id,
+        "lease_state": lease.state.as_str(),
+        "granted_at_ms": lease.granted_at_ms,
+    })))
 }
 
 pub async fn forge_release(
@@ -1069,7 +1499,37 @@ pub async fn forge_release(
     Json(req): Json<ForgeReleaseRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     check_admin_auth(&headers, &state.config)?;
-    let released = state.preemption.release_reservation(&req.mission_id);
+
+    // Chunk 7 lease state machine: RELEASING. Duplicate releases of an
+    // already-terminal lease are idempotent (Ok(None) -> 200 released=false).
+    let begin = state
+        .leases
+        .begin_release(&req.mission_id, &req.node_id)
+        .map_err(|e| match e {
+            crate::lease::LeaseError::Mismatch { expected_mission } => (
+                StatusCode::CONFLICT,
+                format!(
+                    "release does not match active lease (expected mission {expected_mission})"
+                ),
+            ),
+            other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        })?;
+
+    let Some(lease) = begin else {
+        // Duplicate release or no lease known: idempotent success.
+        let _ = state.preemption.release_reservation(&req.mission_id);
+        return Ok(Json(serde_json::json!({
+            "released": false,
+            "restored": false,
+            "resumed_jobs": 0,
+            "reason": "no active lease (duplicate release)",
+        })));
+    };
+    let lease_id = lease.lease_id.clone();
+
+    // RC1 compatibility mirror (is_node_reserved semantics).
+    let _ = state.preemption.release_reservation(&req.mission_id);
+
     let mut restored = false;
     let mut resumed_count = 0;
     let mut reason = String::new();
@@ -1085,41 +1545,154 @@ pub async fn forge_release(
                     | crate::types::NodeLifecycleState::Offline
             ) || md.health_state == "WITHDRAWN"
                 || md.health_state == "REVOKED"
-                || md.health_state == "DRAINING";
+                || md.health_state == "DRAINING"
+                || state.revocations.is_revoked(&req.node_id);
             (prohibited, md.capabilities.role.clone())
         };
 
         if prohibited {
+            // GPU returns from Forge's perspective, but the node must NOT be
+            // restored to the shared pool (revoked/withdrawn/draining).
             reason = "node lifecycle state prohibits shared compute recovery".to_string();
+            let lease = state
+                .leases
+                .complete_release(&lease_id)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            state.leases.sync_lease_ref_on_node(&state.registry, &lease);
+            let _ = state.ops.record(
+                OpsEventKind::LeaseReleased,
+                Some(&req.node_id),
+                Some(&lease_id),
+                None,
+                Some(&req.mission_id),
+                &reason,
+                "RELEASED",
+            );
         } else {
+            // RECOVERING: shared compute restoration.
+            let lease = state
+                .leases
+                .mark_recovery_started(&lease_id)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            state.leases.sync_lease_ref_on_node(&state.registry, &lease);
+            if let Ok(mut md) = rt.metadata.write() {
+                md.health_state = "RECOVERING".to_string();
+                md.last_state_change_ms = now_ms();
+            }
+
+            // Resume checkpointed jobs (idempotent checkpoint consumption).
+            resumed_count = state.preemption.resume_checkpointed(&req.node_id);
+            if resumed_count > 0 {
+                state
+                    .metrics
+                    .jobs_requeued_total
+                    .fetch_add(resumed_count as u64, Ordering::Relaxed);
+            }
+            for cp in state
+                .ops
+                .checkpoints_for_node(&req.node_id)
+                .unwrap_or_default()
+            {
+                if state.ops.consume_checkpoint(&cp.job_id).unwrap_or(false) {
+                    let _ = state.ops.record(
+                        OpsEventKind::JobResumed,
+                        Some(&req.node_id),
+                        Some(&lease_id),
+                        Some(&cp.job_id),
+                        Some(&req.mission_id),
+                        "checkpointed job resumed after lease release",
+                        "RESUMED",
+                    );
+                }
+            }
+
+            // Attempt to restore the shared model runtime. For signed
+            // volunteer workers the worker itself is the runtime authority
+            // (RC1 protocol), so a failed local restart does not keep the
+            // node excluded; the truth is re-established via heartbeats.
+            let model_to_start = if current_model.is_empty() {
+                "thinker".to_string()
+            } else {
+                current_model
+            };
+            match state
+                .model_manager
+                .request_model(&model_to_start, 5200, 16384)
+                .await
+            {
+                Ok(_) => {
+                    let lease = state
+                        .leases
+                        .mark_runtime_ready(&lease_id)
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    state.leases.sync_lease_ref_on_node(&state.registry, &lease);
+                }
+                Err(e) => {
+                    state
+                        .metrics
+                        .runtime_failures_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    let _ = state.ops.record(
+                        OpsEventKind::RuntimeFailed,
+                        Some(&req.node_id),
+                        Some(&lease_id),
+                        None,
+                        Some(&req.mission_id),
+                        &format!("shared runtime restart failed: {e}"),
+                        "RUNTIME_FAILED",
+                    );
+                }
+            }
+
+            // Restore the node to the shared pool (RC1 semantics).
             if let Ok(mut md) = rt.metadata.write() {
                 md.online = true;
                 md.health_state = "ONLINE".to_string();
                 md.reconciliation.status = crate::types::ReconciliationStatus::MATCH;
+                md.runtime_state = RuntimeState::Ready;
+                md.last_state_change_ms = now_ms();
+                md.failure_reason = String::new();
             }
+            let lease = state
+                .leases
+                .complete_release(&lease_id)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            state.leases.sync_lease_ref_on_node(&state.registry, &lease);
             restored = true;
-            resumed_count = state.preemption.resume_checkpointed(&req.node_id);
-
-            // Attempt to restore shared model runtime if configured
-            let model_to_start = if current_model.is_empty() {
-                "thinker"
-            } else {
-                &current_model
-            };
-            let _ = state
-                .model_manager
-                .request_model(model_to_start, 5200, 16384)
-                .await;
+        }
+        crate::state::persist_node(&state.ops, &rt);
+    } else {
+        // Node unknown to the registry: release the lease anyway.
+        let lease = state
+            .leases
+            .complete_release(&lease_id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        state.leases.sync_lease_ref_on_node(&state.registry, &lease);
+        if reason.is_empty() {
+            reason = "node not in registry; lease released".to_string();
         }
     }
 
-    info!(mission_id = %req.mission_id, node_id = %req.node_id, restored = restored, "Forge GPU reservation released");
+    state
+        .metrics
+        .leases_released_total
+        .fetch_add(1, Ordering::Relaxed);
+
+    info!(
+        lease_id = %lease_id,
+        mission_id = %req.mission_id,
+        node_id = %req.node_id,
+        restored = restored,
+        "Forge GPU lease released"
+    );
 
     Ok(Json(serde_json::json!({
-        "released": released,
+        "released": true,
         "restored": restored,
         "resumed_jobs": resumed_count,
-        "reason": reason
+        "reason": reason,
+        "lease_id": lease_id,
+        "lease_state": "RELEASED",
     })))
 }
 
@@ -1159,4 +1732,142 @@ pub async fn admin_kill_switch_status(State(state): State<AppState>) -> Json<ser
     Json(serde_json::json!({
         "external_alpha_enabled": enabled
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chunk 7: operator fleet observability
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Machine-readable operator fleet view. Admin-authenticated.
+/// Exposes safe operational information only: no private keys, admin keys,
+/// bearer tokens, or volunteer-local secrets.
+pub async fn operator_fleet_status(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let now = now_ms();
+
+    let mut nodes = Vec::new();
+    let mut eligible_count = 0u64;
+    let mut ownership_counts: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
+
+    for rt in state.registry.list_nodes() {
+        let md = match rt.metadata.read() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let ownership = crate::eligibility::derive_ownership(&md, md.assigned_jobs);
+        *ownership_counts
+            .entry(ownership.as_str().to_string())
+            .or_insert(0) += 1;
+        let eligibility = crate::eligibility::evaluate_metadata(&md);
+        if eligibility.is_ok() {
+            eligible_count += 1;
+        }
+        let fingerprint = if md.public_key.is_empty() {
+            serde_json::Value::Null
+        } else {
+            let hexed = hex::encode(&md.public_key);
+            serde_json::json!(format!("ed25519:{}", &hexed[..16.min(hexed.len())]))
+        };
+        let last_hb = rt.last_heartbeat_ms();
+        nodes.push(serde_json::json!({
+            "node_id": md.id,
+            "public_fingerprint": fingerprint,
+            "role": md.role,
+            "gpu_name": md.gpu_name,
+            "vram_mb": md.capabilities.vram_mb,
+            "models": md.capabilities.models,
+            "lifecycle_state": md.lifecycle_state.as_str(),
+            "health_state": md.health_state,
+            "online": md.online,
+            "runtime_state": md.runtime_state.as_str(),
+            "reconciliation_status": format!("{:?}", md.reconciliation.status),
+            "ownership": ownership.as_str(),
+            "eligible": eligibility.is_ok(),
+            "ineligibility_reason": eligibility.err().map(|r| r.as_str()),
+            "active_lease": md.active_lease,
+            "assigned_jobs": md.assigned_jobs,
+            "last_heartbeat_ms": last_hb,
+            "heartbeat_age_ms": now.saturating_sub(last_hb),
+            "last_state_change_ms": md.last_state_change_ms,
+            "failure_reason": md.failure_reason,
+        }));
+    }
+
+    let leases: Vec<serde_json::Value> = state
+        .leases
+        .all_leases(100)
+        .into_iter()
+        .map(|l| {
+            serde_json::json!({
+                "lease_id": l.lease_id,
+                "mission_id": l.mission_id,
+                "node_id": l.node_id,
+                "device_id": l.device_id,
+                "state": l.state.as_str(),
+                "vram_mb": l.vram_mb,
+                "priority": l.priority,
+                "requested_at_ms": l.requested_at_ms,
+                "scheduler_excluded_at_ms": l.scheduler_excluded_at_ms,
+                "runtime_exited_at_ms": l.runtime_exited_at_ms,
+                "gpu_released_at_ms": l.gpu_released_at_ms,
+                "granted_at_ms": l.granted_at_ms,
+                "releasing_at_ms": l.releasing_at_ms,
+                "released_at_ms": l.released_at_ms,
+                "recovery_started_at_ms": l.recovery_started_at_ms,
+                "runtime_ready_at_ms": l.runtime_ready_at_ms,
+                "scheduler_eligible_at_ms": l.scheduler_eligible_at_ms,
+                "first_inference_at_ms": l.first_inference_at_ms,
+                "failure_reason": l.failure_reason,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "generated_at_ms": now,
+        "nodes": nodes,
+        "leases": leases,
+        "summary": {
+            "nodes_total": nodes.len(),
+            "eligible_for_shared_work": eligible_count,
+            "ownership": ownership_counts,
+            "active_leases": state.leases.all_active_leases().len(),
+        },
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OperatorEventsQuery {
+    pub node: Option<String>,
+    pub lease: Option<String>,
+    pub job: Option<String>,
+    pub kind: Option<String>,
+    pub limit: Option<u64>,
+}
+
+/// Recent operational event history ("why isn't this GPU available?").
+/// Admin-authenticated.
+pub async fn operator_events(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<OperatorEventsQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let events = state
+        .ops
+        .events(
+            q.node.as_deref(),
+            q.lease.as_deref(),
+            q.job.as_deref(),
+            q.kind.as_deref(),
+            q.limit.unwrap_or(100),
+        )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "count": events.len(),
+        "events": events,
+    })))
 }

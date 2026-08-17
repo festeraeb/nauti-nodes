@@ -115,9 +115,20 @@ impl Scheduler {
     }
 
     fn pick_best_node(&self) -> Result<NodeId> {
+        // Chunk 7: this path also goes through the centralized fail-closed
+        // eligibility gate. No node is ever selected on score alone.
+        let now = now_ms();
         let nodes = self.registry.list_nodes();
         let best = nodes
             .iter()
+            .filter(|rt| {
+                crate::eligibility::evaluate_node(
+                    rt,
+                    now,
+                    crate::fleet::SCHEDULER_STALE_HEARTBEAT_MS,
+                )
+                .is_ok()
+            })
             .filter_map(|rt| {
                 let stats = rt.stats.read().ok()?;
                 let score = compute_score(&stats);

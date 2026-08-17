@@ -29,6 +29,7 @@ impl RevocationStore {
             }
             Connection::open(path)?
         };
+        let _ = conn.pragma_update(None, "busy_timeout", 5000);
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS revoked_nodes (
                 identifier TEXT PRIMARY KEY,

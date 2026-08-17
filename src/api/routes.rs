@@ -59,6 +59,9 @@ pub fn router(state: AppState) -> Router {
             "/v1/admin/alpha/status",
             get(handlers::admin_kill_switch_status),
         )
+        // Chunk 7: operator fleet observability (admin-authenticated).
+        .route("/v1/operator/fleet", get(handlers::operator_fleet_status))
+        .route("/v1/operator/events", get(handlers::operator_events))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

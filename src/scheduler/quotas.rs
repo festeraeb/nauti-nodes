@@ -14,6 +14,7 @@ impl QuotaStore {
             let path = db_url.strip_prefix("sqlite:").unwrap_or(db_url);
             Connection::open(path)?
         };
+        let _ = conn.pragma_update(None, "busy_timeout", 5000);
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS api_quotas (
                 api_key TEXT PRIMARY KEY,

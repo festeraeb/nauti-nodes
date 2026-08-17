@@ -234,6 +234,29 @@ pub struct NodeMetadata {
     pub health_state: String,
     #[serde(default)]
     pub lifecycle_state: NodeLifecycleState,
+    /// Chunk 7: truth state of the inference runtime on this node.
+    /// Defaults to Ready for RC1 wire compatibility (signed volunteer
+    /// workers assert their own runtime truth via heartbeats); coordinator
+    /// restart recovery resets recovered records to Unknown (fail closed).
+    #[serde(default)]
+    pub runtime_state: crate::eligibility::RuntimeState,
+    /// Chunk 7: authoritative active Forge lease reference (None = no lease).
+    /// Maintained by the LeaseManager under the metadata write lock so the
+    /// eligibility decision has a single composition point.
+    #[serde(default)]
+    pub active_lease: Option<crate::eligibility::ActiveLeaseRef>,
+    /// Chunk 7: when the operational state last changed (ms since epoch).
+    #[serde(default)]
+    pub last_state_change_ms: u64,
+    /// Chunk 7: human-readable failure reason when the node is failing closed.
+    #[serde(default)]
+    pub failure_reason: String,
+    /// Chunk 7: coordinator-confirmed in-flight shared assignments.
+    /// Lives INSIDE the metadata lock so `try_assign` can atomically check
+    /// eligibility and claim the slot (closes the work-vs-lease race).
+    /// Not serialized on the wire.
+    #[serde(skip)]
+    pub assigned_jobs: u32,
 }
 
 impl Default for NodeMetadata {
@@ -258,6 +281,11 @@ impl Default for NodeMetadata {
             last_hardware_probe: None,
             health_state: "ONLINE".to_string(),
             lifecycle_state: NodeLifecycleState::Online,
+            runtime_state: crate::eligibility::RuntimeState::default(),
+            active_lease: None,
+            last_state_change_ms: 0,
+            failure_reason: String::new(),
+            assigned_jobs: 0,
         }
     }
 }
@@ -282,6 +310,7 @@ pub struct NodeRuntime {
     pub mailbox: tokio::sync::mpsc::Sender<WorkerMessage>,
     pub stats: std::sync::RwLock<NodeStatistics>,
     pub last_heartbeat: AtomicU64,
+    /// Worker-reported active jobs (from heartbeats; observational).
     pub active_jobs: AtomicU32,
 }
 
@@ -293,6 +322,38 @@ impl NodeRuntime {
             stats: std::sync::RwLock::new(NodeStatistics::default()),
             last_heartbeat: AtomicU64::new(now_ms()),
             active_jobs: AtomicU32::new(0),
+        }
+    }
+
+    /// Coordinator-side confirmed assignment count.
+    pub fn assigned_jobs_count(&self) -> u32 {
+        self.metadata.read().map(|m| m.assigned_jobs).unwrap_or(0)
+    }
+
+    /// Atomically confirm a shared-work assignment on this node.
+    ///
+    /// Fail closed: if ANY authoritative state says the GPU is not eligible
+    /// (lease active, draining, revoked, runtime down, ...), the assignment
+    /// is refused. The eligibility check and the slot increment happen under
+    /// the SAME metadata write lock that lease transitions use, so a lease
+    /// granted concurrently between node selection and this call causes the
+    /// assignment to be rejected (no TOCTOU window).
+    pub fn try_assign(&self) -> bool {
+        let mut md = match self.metadata.write() {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        if crate::eligibility::evaluate_metadata(&md).is_err() {
+            return false;
+        }
+        md.assigned_jobs = md.assigned_jobs.saturating_add(1);
+        true
+    }
+
+    /// Release a previously confirmed assignment slot.
+    pub fn release_assignment(&self) {
+        if let Ok(mut md) = self.metadata.write() {
+            md.assigned_jobs = md.assigned_jobs.saturating_sub(1);
         }
     }
 

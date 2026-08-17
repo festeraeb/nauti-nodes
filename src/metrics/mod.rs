@@ -51,6 +51,24 @@ pub struct FederationMetrics {
     pub inference_requests_total: AtomicU64,
     pub inference_tokens_total: AtomicU64,
     pub inference_errors_total: AtomicU64,
+
+    // --- Chunk 7 operational integrity metrics (observations, not guarantees) ---
+    pub lease_requests_total: AtomicU64,
+    pub leases_granted_total: AtomicU64,
+    pub leases_released_total: AtomicU64,
+    pub lease_conflicts_total: AtomicU64,
+    /// Assignments refused because ownership was lost/uncertain at confirm
+    /// time (work-vs-lease race guard). MUST remain 0 in a healthy fleet for
+    /// completed+granted overlaps; non-zero counts blocked double-ownership.
+    pub ownership_conflicts_blocked_total: AtomicU64,
+    /// Accounting ledger inconsistencies detected (double settle/refund).
+    /// MUST be 0.
+    pub accounting_inconsistencies_total: AtomicU64,
+    pub node_reconnects_total: AtomicU64,
+    pub runtime_failures_total: AtomicU64,
+    pub jobs_preempted_total: AtomicU64,
+    pub jobs_requeued_total: AtomicU64,
+    pub coordinator_restarts_total: AtomicU64,
 }
 
 impl FederationMetrics {
@@ -74,6 +92,21 @@ impl FederationMetrics {
             "federation_scheduled_total": self.federation_scheduled_total.load(Ordering::Relaxed),
             "inference_requests_total": self.inference_requests_total.load(Ordering::Relaxed),
             "inference_tokens_total": self.inference_tokens_total.load(Ordering::Relaxed),
+            "lease_requests_total": self.lease_requests_total.load(Ordering::Relaxed),
+            "leases_granted_total": self.leases_granted_total.load(Ordering::Relaxed),
+            "leases_released_total": self.leases_released_total.load(Ordering::Relaxed),
+            "lease_conflicts_total": self.lease_conflicts_total.load(Ordering::Relaxed),
+            "ownership_conflicts_blocked_total": self
+                .ownership_conflicts_blocked_total
+                .load(Ordering::Relaxed),
+            "accounting_inconsistencies_total": self
+                .accounting_inconsistencies_total
+                .load(Ordering::Relaxed),
+            "node_reconnects_total": self.node_reconnects_total.load(Ordering::Relaxed),
+            "runtime_failures_total": self.runtime_failures_total.load(Ordering::Relaxed),
+            "jobs_preempted_total": self.jobs_preempted_total.load(Ordering::Relaxed),
+            "jobs_requeued_total": self.jobs_requeued_total.load(Ordering::Relaxed),
+            "coordinator_restarts_total": self.coordinator_restarts_total.load(Ordering::Relaxed),
         })
     }
 
@@ -234,6 +267,71 @@ impl FederationMetrics {
             self.inference_errors_total.load(Ordering::Relaxed)
         ));
 
+        // Chunk 7 operational integrity metrics
+        for (name, help, value) in [
+            (
+                "nauti_lease_requests_total",
+                "Total Forge lease requests.",
+                self.lease_requests_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_leases_granted_total",
+                "Total Forge leases granted (ownership actually yielded).",
+                self.leases_granted_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_leases_released_total",
+                "Total Forge leases released.",
+                self.leases_released_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_lease_conflicts_total",
+                "Conflicting lease attempts rejected.",
+                self.lease_conflicts_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_ownership_conflicts_blocked_total",
+                "Shared assignments refused by the fail-closed race guard.",
+                self.ownership_conflicts_blocked_total
+                    .load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_accounting_inconsistencies_total",
+                "Token accounting inconsistencies detected (must be 0).",
+                self.accounting_inconsistencies_total
+                    .load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_node_reconnects_total",
+                "Worker reconnects with persistent identity.",
+                self.node_reconnects_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_runtime_failures_total",
+                "Inference runtime failures observed.",
+                self.runtime_failures_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_jobs_preempted_total",
+                "Shared jobs preempted by Forge leases.",
+                self.jobs_preempted_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_jobs_requeued_total",
+                "Shared jobs requeued after failure/preemption.",
+                self.jobs_requeued_total.load(Ordering::Relaxed),
+            ),
+            (
+                "nauti_coordinator_restarts_total",
+                "Coordinator restart recoveries.",
+                self.coordinator_restarts_total.load(Ordering::Relaxed),
+            ),
+        ] {
+            out.push_str(&format!("# HELP {name} {help}\n"));
+            out.push_str(&format!("# TYPE {name} counter\n"));
+            out.push_str(&format!("{name} {value}\n"));
+        }
+
         out
     }
 }
@@ -289,6 +387,33 @@ impl Clone for FederationMetrics {
             ),
             inference_errors_total: AtomicU64::new(
                 self.inference_errors_total.load(Ordering::Relaxed),
+            ),
+            lease_requests_total: AtomicU64::new(self.lease_requests_total.load(Ordering::Relaxed)),
+            leases_granted_total: AtomicU64::new(self.leases_granted_total.load(Ordering::Relaxed)),
+            leases_released_total: AtomicU64::new(
+                self.leases_released_total.load(Ordering::Relaxed),
+            ),
+            lease_conflicts_total: AtomicU64::new(
+                self.lease_conflicts_total.load(Ordering::Relaxed),
+            ),
+            ownership_conflicts_blocked_total: AtomicU64::new(
+                self.ownership_conflicts_blocked_total
+                    .load(Ordering::Relaxed),
+            ),
+            accounting_inconsistencies_total: AtomicU64::new(
+                self.accounting_inconsistencies_total
+                    .load(Ordering::Relaxed),
+            ),
+            node_reconnects_total: AtomicU64::new(
+                self.node_reconnects_total.load(Ordering::Relaxed),
+            ),
+            runtime_failures_total: AtomicU64::new(
+                self.runtime_failures_total.load(Ordering::Relaxed),
+            ),
+            jobs_preempted_total: AtomicU64::new(self.jobs_preempted_total.load(Ordering::Relaxed)),
+            jobs_requeued_total: AtomicU64::new(self.jobs_requeued_total.load(Ordering::Relaxed)),
+            coordinator_restarts_total: AtomicU64::new(
+                self.coordinator_restarts_total.load(Ordering::Relaxed),
             ),
         }
     }

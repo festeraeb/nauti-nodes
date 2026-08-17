@@ -201,7 +201,7 @@ impl ScaleSimulator {
                     .map(|n| n.node_id.clone())
             };
 
-            if let Some(node_id) = selected {
+            if let Some(_node_id) = selected {
                 decisions += 1;
                 if work.is_mission {
                     self.mission_served += 1;

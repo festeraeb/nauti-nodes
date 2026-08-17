@@ -369,6 +369,16 @@ pub struct ForgeReservationRequest {
 
     /// Whether preemption is allowed
     pub allow_preemption: bool,
+
+    /// Chunk 7 (additive, RC1-compatible): stable lease identifier.
+    /// If omitted the coordinator generates one; duplicates for the same
+    /// (mission_id, node_id) are idempotent.
+    #[serde(default)]
+    pub lease_id: Option<String>,
+
+    /// Chunk 7 (additive): GPU/device identity where available.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 /// Result of a preemption request.
@@ -543,6 +553,23 @@ impl PreemptionManager {
     pub fn reservation_count(&self) -> usize {
         self.reservations.lock().unwrap().len()
     }
+
+    /// Chunk 7: mark a job completed successfully (removes it from the
+    /// preemptible set so later reservations do not touch it).
+    pub fn complete_job(&self, job_id: &str) {
+        let mut jobs = self.jobs.lock().unwrap();
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.complete();
+        }
+    }
+
+    /// Chunk 7: mark a job failed/killed.
+    pub fn fail_job(&self, job_id: &str) {
+        let mut jobs = self.jobs.lock().unwrap();
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.kill();
+        }
+    }
 }
 
 impl Default for PreemptionManager {
@@ -602,6 +629,8 @@ mod tests {
             vram_mb: 16384,
             priority: 100,
             allow_preemption: true,
+            lease_id: None,
+            device_id: None,
         };
 
         let result = manager.handle_reservation(&request);
@@ -624,6 +653,8 @@ mod tests {
             vram_mb: 16384,
             priority: 100,
             allow_preemption: true,
+            lease_id: None,
+            device_id: None,
         };
 
         let result = manager.handle_reservation(&request);
@@ -642,6 +673,8 @@ mod tests {
             vram_mb: 16384,
             priority: 100,
             allow_preemption: true,
+            lease_id: None,
+            device_id: None,
         };
         manager.handle_reservation(&request);
 
@@ -662,6 +695,8 @@ mod tests {
             vram_mb: 16384,
             priority: 100,
             allow_preemption: true,
+            lease_id: None,
+            device_id: None,
         };
         manager.handle_reservation(&request);
         assert_eq!(manager.reservation_count(), 1);

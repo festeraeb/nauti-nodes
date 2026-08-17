@@ -27,9 +27,24 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
     let mut state = AppState::new(config.clone())?;
     state.identity = Some(std::sync::Arc::new(identity));
     state.lineage = Some(std::sync::Arc::new(lineage));
+
+    // Chunk 7: count coordinator restarts observationally (every
+    // COORDINATOR_STARTED journal entry beyond the first is a restart).
+    let starts = state
+        .ops
+        .events(None, None, None, Some("COORDINATOR_STARTED"), 1000)
+        .map(|e| e.len())
+        .unwrap_or(1);
+    if starts > 1 {
+        state
+            .metrics
+            .coordinator_restarts_total
+            .store((starts - 1) as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fleet::sync_fleet(&state.registry, &state.http, &config.forge_url).await;
 
-    heartbeat::spawn_sweeper(state.registry.clone(), 15, 30);
+    heartbeat::spawn_sweeper_with_ops(state.registry.clone(), 15, 30, Some(state.ops.clone()));
 
     let sync_state = state.clone();
     let forge_url = config.forge_url.clone();

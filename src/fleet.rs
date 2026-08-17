@@ -1,10 +1,20 @@
 //! Sync Forge fleet into node registry; prefer RTX 2060 for thinker workloads.
+//!
+//! Chunk 7: ALL node selection goes through the centralized fail-closed
+//! eligibility evaluator (`crate::eligibility`). There are no fallback phases
+//! with subtly different rules: if authoritative state is ambiguous the node
+//! is not picked.
 
 use crate::adapter::forge;
+use crate::eligibility;
 use crate::node::registry::NodeRegistry;
-use crate::types::{NodeMetadata, NodeStatistics};
+use crate::types::{now_ms, NodeMetadata, NodeStatistics};
 use std::sync::Arc;
 use tracing::info;
+
+/// Heartbeat freshness window for scheduling decisions. The sweeper marks
+/// nodes STALE >15s and OFFLINE >30s; this bound fails closed independently.
+pub const SCHEDULER_STALE_HEARTBEAT_MS: u64 = 45_000;
 
 pub async fn sync_fleet(registry: &NodeRegistry, client: &reqwest::Client, forge_url: &str) {
     let nodes = forge::fetch_fleet_from_forge(client, forge_url).await;
@@ -155,7 +165,36 @@ pub async fn sync_fleet(registry: &NodeRegistry, client: &reqwest::Client, forge
         if registry.get_node(&id).is_some() {
             if let Some(rt) = registry.get_node(&id) {
                 if let Ok(mut md) = rt.metadata.write() {
-                    *md = m;
+                    // Chunk 7 invariant: fleet sync must NEVER clobber
+                    // operator/lease ownership state. A leased, draining,
+                    // withdrawn or revoked node keeps its state even when
+                    // Forge reports it online.
+                    let leased = md
+                        .active_lease
+                        .as_ref()
+                        .map(|l| l.state.is_active())
+                        .unwrap_or(false);
+                    let protected = leased
+                        || matches!(
+                            md.health_state.as_str(),
+                            "WITHDRAWN"
+                                | "DRAINING"
+                                | "REVOKED"
+                                | "RESERVED_FORGE"
+                                | "PREEMPTING"
+                                | "RECOVERING"
+                        );
+                    if protected {
+                        // Refresh hardware observation only; ownership truth
+                        // is untouched.
+                        md.observed = m.observed;
+                        md.last_hardware_probe = m.last_hardware_probe;
+                        md.reconciliation = m.reconciliation;
+                    } else {
+                        let keep_lease = md.active_lease.clone();
+                        *md = m;
+                        md.active_lease = keep_lease;
+                    }
                 }
                 rt.touch_heartbeat(NodeStatistics {
                     free_vram_mb: rt
@@ -172,6 +211,20 @@ pub async fn sync_fleet(registry: &NodeRegistry, client: &reqwest::Client, forge
     }
 }
 
+/// Centralized role-matching predicate (kept separate from eligibility).
+fn role_matches(md: &NodeMetadata, role: &str) -> bool {
+    let r = md.role.to_lowercase();
+    if role == "thinker" {
+        r.contains("think") || md.id.contains("2060") || md.id == "RTX2060"
+    } else if role == "coder" || role == "coding" {
+        r.contains("cod") || md.id.contains("P100")
+    } else if role == "reviewer" {
+        r.contains("review") || md.id.contains("1070")
+    } else {
+        r.contains(role) || role == "general"
+    }
+}
+
 pub fn pick_node_for_role(
     registry: &NodeRegistry,
     prefer_role: Option<&str>,
@@ -179,153 +232,59 @@ pub fn pick_node_for_role(
 ) -> Option<Arc<crate::types::NodeRuntime>> {
     let nodes = registry.list_nodes();
     let role = prefer_role.unwrap_or("thinker").to_lowercase();
+    let now = now_ms();
 
-    let mut candidates: Vec<_> = nodes
+    // Phase 0 (Chunk 7): ONE centralized fail-closed eligibility gate for
+    // every candidate. Revoked, withdrawn, draining, offline, degraded,
+    // stale-heartbeat, hardware-mismatch, stale-reconciliation, runtime-down,
+    // Forge-lease-requested/draining/granted/leased/releasing/recovering and
+    // ownership-uncertain nodes are ALL rejected here.
+    let eligible: Vec<Arc<crate::types::NodeRuntime>> = nodes
         .into_iter()
-        .filter(|rt| {
-            let md = match rt.metadata.read() {
-                Ok(m) => m,
-                Err(_) => return false,
-            };
-            info!(id = %md.id, online = md.online, health = %md.health_state, role = %md.role, gpu = %md.gpu_name, reconciliation = ?md.reconciliation.status, "evaluating node for role");
-            if !md.online
-                || md.health_state == "DRAINING"
-                || md.health_state == "WITHDRAWN"
-                || md.health_state == "REVOKED"
-                || md.health_state == "OFFLINE"
-                || md.health_state == "DEGRADED"
-                || md.health_state == "PREEMPTING"
-                || md.health_state == "RESERVED_FORGE"
-                || matches!(
-                    md.lifecycle_state,
-                    crate::types::NodeLifecycleState::Draining
-                        | crate::types::NodeLifecycleState::Withdrawn
-                        | crate::types::NodeLifecycleState::Revoked
-                        | crate::types::NodeLifecycleState::Offline
-                        | crate::types::NodeLifecycleState::Degraded
-                )
-            {
-                return false;
-            }
-
-            // Enforce live observation and match/partial_match reconciliation policy
-            let is_live_obs = if let Some(ref obs) = md.observed {
-                matches!(
-                    obs.source_type,
-                    crate::types::TelemetrySourceType::LocalLiveObservation
-                        | crate::types::TelemetrySourceType::RemoteLiveObservation
-                )
-            } else {
-                true // Allow volunteer nodes with self-reported claim when remote Forge is absent
-            };
-            let eligible = is_live_obs
-                && matches!(
-                    md.reconciliation.status,
-                    crate::types::ReconciliationStatus::MATCH
-                        | crate::types::ReconciliationStatus::PARTIAL_MATCH
-                        | crate::types::ReconciliationStatus::UNVERIFIED
-                );
-            if !eligible {
-                return false;
-            }
-
-            if avoid_p100 && (md.gpu_name.contains("P100") || md.id.contains("P100")) {
-                return false;
-            }
-            let r = md.role.to_lowercase();
-            if role == "thinker" {
-                r.contains("think") || md.id.contains("2060") || md.id == "RTX2060"
-            } else if role == "coder" || role == "coding" {
-                r.contains("cod") || md.id.contains("P100")
-            } else if role == "reviewer" {
-                r.contains("review") || md.id.contains("1070")
-            } else {
-                r.contains(&role) || role == "general"
-            }
-        })
+        .filter(
+            |rt| match eligibility::evaluate_node(rt, now, SCHEDULER_STALE_HEARTBEAT_MS) {
+                Ok(_) => {
+                    let md = match rt.metadata.read() {
+                        Ok(m) => m,
+                        Err(_) => return false,
+                    };
+                    if avoid_p100 && (md.gpu_name.contains("P100") || md.id.contains("P100")) {
+                        return false;
+                    }
+                    true
+                }
+                Err(reason) => {
+                    info!(
+                        node = %rt.metadata.read().map(|m| m.id.clone()).unwrap_or_default(),
+                        reason = reason.as_str(),
+                        "node ineligible for shared work (fail closed)"
+                    );
+                    false
+                }
+            },
+        )
         .collect();
 
+    // Phase 1: role-preferred candidates.
+    let mut candidates: Vec<Arc<crate::types::NodeRuntime>> = eligible
+        .iter()
+        .filter(|rt| {
+            rt.metadata
+                .read()
+                .map(|m| role_matches(&m, &role))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
     info!(role = %role, avoid_p100 = avoid_p100, candidate_count = candidates.len(), "pick_node_for_role candidates phase 1");
 
+    // Phase 2: relax role preference (any eligible node). Eligibility itself
+    // is NEVER relaxed: there is no fail-open fallback.
     if candidates.is_empty() {
-        candidates = registry
-            .list_nodes()
-            .into_iter()
-            .filter(|rt| {
-                rt.metadata
-                    .read()
-                    .map(|m| {
-                        if !m.online
-                            || m.health_state == "DRAINING"
-                            || m.health_state == "WITHDRAWN"
-                            || m.health_state == "REVOKED"
-                            || m.health_state == "OFFLINE"
-                            || m.health_state == "DEGRADED"
-                            || m.health_state == "PREEMPTING"
-                            || m.health_state == "RESERVED_FORGE"
-                            || matches!(
-                                m.lifecycle_state,
-                                crate::types::NodeLifecycleState::Draining
-                                    | crate::types::NodeLifecycleState::Withdrawn
-                                    | crate::types::NodeLifecycleState::Revoked
-                                    | crate::types::NodeLifecycleState::Offline
-                                    | crate::types::NodeLifecycleState::Degraded
-                            )
-                        {
-                            return false;
-                        }
-                        let is_live_obs = if let Some(ref obs) = m.observed {
-                            matches!(
-                                obs.source_type,
-                                crate::types::TelemetrySourceType::LocalLiveObservation
-                                    | crate::types::TelemetrySourceType::RemoteLiveObservation
-                            )
-                        } else {
-                            true
-                        };
-                        let eligible = is_live_obs
-                            && matches!(
-                                m.reconciliation.status,
-                                crate::types::ReconciliationStatus::MATCH
-                                    | crate::types::ReconciliationStatus::PARTIAL_MATCH
-                                    | crate::types::ReconciliationStatus::UNVERIFIED
-                            );
-                        eligible && (!avoid_p100 || !m.gpu_name.contains("P100"))
-                    })
-                    .unwrap_or(false)
-            })
-            .collect();
+        candidates = eligible.clone();
         info!(
             candidate_count = candidates.len(),
-            "pick_node_for_role candidates phase 2"
-        );
-    }
-    if candidates.is_empty() {
-        candidates = registry
-            .list_nodes()
-            .into_iter()
-            .filter(|rt| {
-                rt.metadata
-                    .read()
-                    .map(|m| {
-                        m.online
-                            && m.reconciliation.status
-                                != crate::types::ReconciliationStatus::MISMATCH
-                            && !matches!(
-                                m.lifecycle_state,
-                                crate::types::NodeLifecycleState::Draining
-                                    | crate::types::NodeLifecycleState::Withdrawn
-                                    | crate::types::NodeLifecycleState::Revoked
-                                    | crate::types::NodeLifecycleState::Offline
-                                    | crate::types::NodeLifecycleState::Degraded
-                            )
-                    })
-                    .unwrap_or(false)
-            })
-            .collect();
-        info!(
-            candidate_count = candidates.len(),
-            "pick_node_for_role candidates phase 3"
+            "pick_node_for_role candidates phase 2 (role relaxed)"
         );
     }
 
@@ -354,6 +313,15 @@ pub fn pick_node_for_role(
             .unwrap_or(0.0);
         sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
     })
+}
+
+/// Confirm a shared-work assignment on an already-picked node.
+///
+/// This is the work-vs-lease race guard: if a Forge lease was granted (or the
+/// node otherwise became ineligible) between selection and this call, the
+/// assignment is refused and the caller must requeue/refuse the work.
+pub fn confirm_assignment(rt: &crate::types::NodeRuntime) -> bool {
+    rt.try_assign()
 }
 
 pub fn register_local_worker(registry: &NodeRegistry, meta: NodeMetadata) {

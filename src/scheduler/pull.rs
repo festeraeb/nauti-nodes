@@ -373,7 +373,7 @@ mod tests {
         scheduler.enqueue(make_work(WorkloadClass::Inference, 8000, 10));
 
         let req = make_request(24000, vec![WorkloadClass::Inference]);
-        let lease = scheduler.try_match(&req).unwrap();
+        let _lease = scheduler.try_match(&req).unwrap();
         // Should get the highest priority work first
         assert_eq!(scheduler.queue_len(), 2);
     }

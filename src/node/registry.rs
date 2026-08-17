@@ -55,7 +55,19 @@ impl NodeRegistry {
                 if md.health_state == "WITHDRAWN"
                     || md.health_state == "DRAINING"
                     || md.health_state == "REVOKED"
+                    || md.health_state == "RESERVED_FORGE"
+                    || md.health_state == "PREEMPTING"
+                    || md
+                        .active_lease
+                        .as_ref()
+                        .map(|l| l.state.is_active())
+                        .unwrap_or(false)
                 {
+                    // Chunk 7 invariant: heartbeat silence must never degrade
+                    // a leased/reserved node into OFFLINE (which sync_fleet
+                    // could then resurrect as shared-ONLINE). Lease truth is
+                    // preserved; the node simply stops heartbeating while
+                    // Forge owns it.
                     continue;
                 }
                 let prev_health = md.health_state.clone();

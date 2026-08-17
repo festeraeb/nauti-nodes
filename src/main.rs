@@ -40,6 +40,39 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        // Chunk 7 operator observability.
+        "fleet" => {
+            if let Err(e) = cli::run_fleet(&config, json_output).await {
+                eprintln!("Fleet status error: {e}");
+                std::process::exit(1);
+            }
+        }
+        "events" => {
+            let arg_for = |flag: &str| -> Option<String> {
+                args.iter()
+                    .position(|a| a == flag)
+                    .and_then(|idx| args.get(idx + 1).cloned())
+            };
+            let node = arg_for("--node");
+            let lease = arg_for("--lease");
+            let kind = arg_for("--kind");
+            let limit = arg_for("--limit")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(50);
+            if let Err(e) = cli::run_events(
+                &config,
+                node.as_deref(),
+                lease.as_deref(),
+                kind.as_deref(),
+                limit,
+                json_output,
+            )
+            .await
+            {
+                eprintln!("Events error: {e}");
+                std::process::exit(1);
+            }
+        }
         "bundle" | "diagnostic-bundle" => {
             let out_arg = args
                 .iter()

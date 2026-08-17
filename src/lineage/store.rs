@@ -94,7 +94,10 @@ impl LineageStore {
         } else {
             // Strip "sqlite:" prefix if present
             let path = db_url.strip_prefix("sqlite:").unwrap_or(db_url);
-            Connection::open(path).map_err(|e| Error::Internal(format!("open db {path}: {e}")))?
+            let conn = Connection::open(path)
+                .map_err(|e| Error::Internal(format!("open db {path}: {e}")))?;
+            let _ = conn.pragma_update(None, "busy_timeout", 5000);
+            conn
         };
         Self::new(conn)
     }
