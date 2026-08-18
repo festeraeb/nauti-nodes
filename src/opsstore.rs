@@ -236,6 +236,19 @@ pub struct FenceRow {
     pub updated_at_ms: u64,
 }
 
+/// Chunk 9: durable delegated job row (exactly-once across failover).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegatedJobRow {
+    pub job_id: String,
+    pub origin_coordinator_id: String,
+    pub executing_coordinator_id: Option<String>,
+    /// PENDING | RUNNING | COMPLETED | FAILED | CANCELLED
+    pub state: String,
+    pub ownership_epoch: u64,
+    pub created_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+}
+
 /// Checkpoint registry row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointRow {
@@ -380,13 +393,23 @@ impl OpsStore {
                 consumed_at_ms INTEGER
             );
             -- Chunk 8B: durable per-resource fencing fence. Highest accepted
-            -- authority epoch per resource; survives restarts so a fence can
-            -- never roll back.
+            -- authority per resource; survives restarts so a fence can never roll back.
             CREATE TABLE IF NOT EXISTS federation_fence (
                 resource_id TEXT PRIMARY KEY,
                 epoch INTEGER NOT NULL,
                 authority_coordinator_id TEXT NOT NULL,
                 updated_at_ms INTEGER NOT NULL
+            );
+            -- Chunk 9: durable delegated job identity table (exactly-once).
+            -- A duplicate arrival returns the current authoritative status/result.
+            CREATE TABLE IF NOT EXISTS delegated_job (
+                job_id TEXT PRIMARY KEY,
+                origin_coordinator_id TEXT NOT NULL,
+                executing_coordinator_id TEXT,
+                state TEXT NOT NULL,
+                ownership_epoch INTEGER NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                completed_at_ms INTEGER
             );
             ",
         )
@@ -1129,6 +1152,85 @@ impl OpsStore {
                 fence.epoch as i64,
                 fence.authority_coordinator_id,
                 fence.updated_at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    // ── Chunk 9: durable delegated jobs ─────────────────────────────────
+
+    /// Register a delegated job. Fails if the job_id already exists; the
+    /// caller then returns the current authoritative status instead of
+    /// executing twice.
+    pub fn insert_delegated_job(&self, job: &DelegatedJobRow) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO delegated_job (
+                job_id, origin_coordinator_id, executing_coordinator_id,
+                state, ownership_epoch, created_at_ms, completed_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                job.job_id,
+                job.origin_coordinator_id,
+                job.executing_coordinator_id,
+                job.state,
+                job.ownership_epoch as i64,
+                job.created_at_ms,
+                job.completed_at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The authoritative current record for a delegated job, if any.
+    pub fn delegated_job(&self, job_id: &str) -> Result<Option<DelegatedJobRow>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        match conn.query_row(
+            "SELECT job_id, origin_coordinator_id, executing_coordinator_id,
+                    state, ownership_epoch, created_at_ms, completed_at_ms
+             FROM delegated_job WHERE job_id = ?1",
+            params![job_id],
+            |r| {
+                Ok(DelegatedJobRow {
+                    job_id: r.get(0)?,
+                    origin_coordinator_id: r.get(1)?,
+                    executing_coordinator_id: r.get(2)?,
+                    state: r.get(3)?,
+                    ownership_epoch: r.get::<_, i64>(4)? as u64,
+                    created_at_ms: r.get::<_, i64>(5)? as u64,
+                    completed_at_ms: r.get::<_, Option<i64>>(6)?.map(|v| v as u64),
+                })
+            },
+        ) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Update the authoritative state of a delegated job.
+    pub fn update_delegated_job(&self, job: &DelegatedJobRow) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "UPDATE delegated_job SET
+                executing_coordinator_id = ?2,
+                state = ?3,
+                completed_at_ms = ?4
+             WHERE job_id = ?1",
+            params![
+                job.job_id,
+                job.executing_coordinator_id,
+                job.state,
+                job.completed_at_ms
             ],
         )?;
         Ok(())

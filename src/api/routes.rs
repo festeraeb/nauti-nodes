@@ -44,6 +44,15 @@ pub fn router(state: AppState) -> Router {
             "/v1/federation/send-command",
             post(handlers::federation_send_command),
         )
+        // Chunk 9: durable delegated-job submit + status (exactly-once).
+        .route(
+            "/v1/federation/delegated/submit",
+            post(handlers::delegated_job_submit),
+        )
+        .route(
+            "/v1/federation/delegated/status/:job_id",
+            get(handlers::delegated_job_status),
+        )
         .route(
             "/v1/admin/reconciliation",
             get(handlers::admin_reconciliation),

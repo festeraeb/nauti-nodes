@@ -17,14 +17,14 @@ use axum::{
         Html, IntoResponse, Json,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceRequest {
     pub model: Option<String>,
     pub messages: Vec<ChatMessage>,
@@ -1409,6 +1409,83 @@ pub async fn federation_command(
             };
             Err((status, reject.to_string()))
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DelegatedJobSubmit {
+    pub job_id: uuid::Uuid,
+    pub origin_coordinator_id: String,
+}
+
+/// Chunk 9: receive a delegated job. Records the pending job durably; a
+/// duplicate job_id returns the current authoritative status instead of
+/// executing twice. Admin-authenticated.
+pub async fn delegated_job_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DelegatedJobSubmit>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let epoch = state.leases.current_authority_epoch();
+    match state.delegation.insert_pending(
+        &req.job_id.to_string(),
+        &req.origin_coordinator_id,
+        epoch,
+    ) {
+        Ok(()) => {
+            let _ = state.ops.record(
+                OpsEventKind::JobCompleted,
+                Some(&req.job_id.to_string()),
+                None,
+                Some(&req.job_id.to_string()),
+                Some(&req.origin_coordinator_id),
+                "delegated job accepted (exactly-once)",
+                "PENDING",
+            );
+            Ok(Json(serde_json::json!({
+                "ack": "Accepted",
+                "job_id": req.job_id,
+            })))
+        }
+        Err(_) => {
+            // Duplicate: return current authoritative status.
+            let status = state
+                .delegation
+                .get(&req.job_id.to_string())
+                .map(|row| row.map(|r| r.state).unwrap_or_else(|| "UNKNOWN".into()))
+                .unwrap_or_else(|_| "UNKNOWN".into());
+            Ok(Json(serde_json::json!({
+                "ack": "Duplicate",
+                "job_id": req.job_id,
+                "status": status,
+            })))
+        }
+    }
+}
+
+/// Chunk 9: authoritative status of a delegated job. Admin-authenticated.
+pub async fn delegated_job_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let row = state
+        .delegation
+        .get(&job_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match row {
+        Some(row) => Ok(Json(serde_json::json!({
+            "job_id": row.job_id,
+            "origin_coordinator_id": row.origin_coordinator_id,
+            "executing_coordinator_id": row.executing_coordinator_id,
+            "state": row.state,
+            "ownership_epoch": row.ownership_epoch,
+            "created_at_ms": row.created_at_ms,
+            "completed_at_ms": row.completed_at_ms,
+        }))),
+        None => Err((StatusCode::NOT_FOUND, "delegated job not found".into())),
     }
 }
 

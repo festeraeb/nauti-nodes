@@ -45,6 +45,7 @@ use std::sync::Arc;
 // ── Coordinator identity (Chunk 8) ────────────────────────────────────────
 
 use crate::federation::authority::AuthorityMonitor;
+use crate::federation::delegation::DelegationStore;
 use crate::federation::envelope::FederationAuthenticator;
 use crate::federation::fence::FenceGate;
 use crate::federation::worker_gate::WorkerFenceState;
@@ -82,6 +83,8 @@ pub struct AppState {
     pub worker_gate: Arc<WorkerFenceState>,
     /// Chunk 8B.4: authority election / failover monitor.
     pub authority: Arc<AuthorityMonitor>,
+    /// Chunk 9: durable delegated-job store (exactly-once across failover).
+    pub delegation: Arc<DelegationStore>,
 }
 
 impl AppState {
@@ -148,6 +151,9 @@ impl AppState {
             .unwrap_or_default();
         let authority = Arc::new(AuthorityMonitor::new(local_id, peers.clone()));
 
+        // Chunk 9: durable delegated-job identity store (exactly-once).
+        let delegation = Arc::new(DelegationStore::new(ops.clone()));
+
         Ok(Self {
             config,
             registry,
@@ -167,6 +173,7 @@ impl AppState {
             peers,
             worker_gate,
             authority,
+            delegation,
         })
     }
 }

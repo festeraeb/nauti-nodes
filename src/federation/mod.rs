@@ -16,6 +16,7 @@
 //! events. Nothing here generates synthetic federation telemetry.
 
 pub mod authority;
+pub mod delegation;
 pub mod envelope;
 pub mod fence;
 pub mod snapshot;
