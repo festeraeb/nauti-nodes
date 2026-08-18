@@ -158,7 +158,7 @@ async fn coordinator_identity_persists_across_restart_real_files() {
     let coord_path = std::path::PathBuf::from(config.coordinator_identity_path.as_ref().unwrap());
 
     let s1 = AppState::new(config.clone()).unwrap();
-    let id1 = s1.identity.clone().expect("identity loaded");
+    let id1 = nauti_nodes::state::identity_snapshot(&s1).expect("identity loaded");
     let first_node_id = id1.node_identity.node_id.clone();
     drop(s1);
 
@@ -173,7 +173,7 @@ async fn coordinator_identity_persists_across_restart_real_files() {
 
     // Restart: same identity recovered from disk.
     let s2 = AppState::new(config.clone()).unwrap();
-    let id2 = s2.identity.clone().expect("identity loaded");
+    let id2 = nauti_nodes::state::identity_snapshot(&s2).expect("identity loaded");
     assert_eq!(id2.node_identity.node_id, first_node_id);
     assert_eq!(
         id2.node_identity.public_key, id1.node_identity.public_key,
@@ -188,8 +188,8 @@ async fn in_memory_contract_writes_no_file_and_is_independent() {
 
     let s1 = AppState::new(config.clone()).unwrap();
     let s2 = AppState::new(config.clone()).unwrap();
-    let id1 = s1.identity.as_ref().unwrap();
-    let id2 = s2.identity.as_ref().unwrap();
+    let id1 = nauti_nodes::state::identity_snapshot(&s1).unwrap();
+    let id2 = nauti_nodes::state::identity_snapshot(&s2).unwrap();
     assert_ne!(
         id1.node_identity.node_id, id2.node_identity.node_id,
         "without a configured path each start is an independent in-memory identity"
@@ -265,7 +265,7 @@ async fn lease_authority_epoch_syncs_from_persisted_identity() {
     // Restart: the lease authority must carry the persisted epoch.
     let s2 = AppState::new(config.clone()).unwrap();
     assert_eq!(s2.leases.current_authority_epoch(), 1);
-    let id = s2.identity.as_ref().unwrap();
+    let id = nauti_nodes::state::identity_snapshot(&s2).unwrap();
     assert_eq!(id.authority_epoch.value(), 1);
     assert!(
         id.can_issue_mutations(),

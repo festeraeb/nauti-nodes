@@ -23,6 +23,27 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/node/join", post(handlers::node_join))
         // Chunk 8B: federation observability (real local state only).
         .route("/v1/federation/status", get(handlers::federation_status))
+        // Chunk 8B.4: authority probe target (real local record).
+        .route(
+            "/v1/federation/authority",
+            get(handlers::federation_authority),
+        )
+        // Chunk 8B.13: snapshot + catch-up (admin-authenticated).
+        .route(
+            "/v1/federation/snapshot",
+            get(handlers::federation_snapshot_get),
+        )
+        .route("/v1/federation/catchup", post(handlers::federation_catchup))
+        // Chunk 8B.2: versioned fenced command path (worker side).
+        .route(
+            "/internal/federation/command",
+            post(handlers::federation_command),
+        )
+        // Chunk 8B.5: coordinator-side signed command delivery.
+        .route(
+            "/v1/federation/send-command",
+            post(handlers::federation_send_command),
+        )
         .route(
             "/v1/admin/reconciliation",
             get(handlers::admin_reconciliation),

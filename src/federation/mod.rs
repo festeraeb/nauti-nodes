@@ -15,6 +15,12 @@
 //! deterministic logic or state supplied by configuration / real runtime
 //! events. Nothing here generates synthetic federation telemetry.
 
+pub mod authority;
+pub mod envelope;
+pub mod fence;
+pub mod snapshot;
+pub mod worker_gate;
+
 use crate::node::coordinator_identity::{CoordinatorIdentity, FederationState};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

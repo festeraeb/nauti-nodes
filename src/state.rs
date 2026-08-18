@@ -44,6 +44,10 @@ use std::sync::Arc;
 
 // ── Coordinator identity (Chunk 8) ────────────────────────────────────────
 
+use crate::federation::authority::AuthorityMonitor;
+use crate::federation::envelope::FederationAuthenticator;
+use crate::federation::fence::FenceGate;
+use crate::federation::worker_gate::WorkerFenceState;
 use crate::federation::PeerRegistry;
 use crate::node::coordinator_identity::{CoordinatorIdentity, FederationState};
 use crate::node::identity::NodeIdentity;
@@ -55,7 +59,9 @@ pub struct AppState {
     pub scheduler: Arc<Scheduler>,
     pub jobs: Arc<JobStore>,
     pub http: reqwest::Client,
-    pub identity: Option<Arc<CoordinatorIdentity>>,
+    /// Chunk 8B: RwLock-guarded so catch-up / failover can swap the
+    /// identity (epoch adoption) without restarting the process.
+    pub identity: Arc<std::sync::RwLock<Option<Arc<CoordinatorIdentity>>>>,
     pub lineage: Option<Arc<LineageStore>>,
     /// Chunk 7: Arc-shared so handler/task increments are not lost across
     /// AppState clones (the previous by-value clone snapshot was lossy).
@@ -72,6 +78,10 @@ pub struct AppState {
     /// Chunk 8B: federation peer registry (seeded from config; filled in by
     /// real handshakes — never synthetic peer state).
     pub peers: Arc<PeerRegistry>,
+    /// Chunk 8B.2: worker-side fenced command gate (durable).
+    pub worker_gate: Arc<WorkerFenceState>,
+    /// Chunk 8B.4: authority election / failover monitor.
+    pub authority: Arc<AuthorityMonitor>,
 }
 
 impl AppState {
@@ -115,13 +125,36 @@ impl AppState {
         // Chunk 8B: federation peers from configuration.
         let peers = Arc::new(PeerRegistry::seed_from_endpoints(&config.federation_peers));
 
+        // Chunk 8B.2: worker-side fenced command gate. Trust anchors come
+        // from configured coordinator keys; replay protection reuses the
+        // existing NonceTracker primitive; revocation is the durable store.
+        let jobs = Arc::new(JobStore::new());
+        let worker_gate = Arc::new(WorkerFenceState::new(
+            FederationAuthenticator::new(
+                config.trusted_coordinator_keys.clone(),
+                Arc::new(NonceTracker::new()),
+                revocations.clone(),
+            ),
+            FenceGate::new(ops.clone()),
+            leases.clone(),
+            ops.clone(),
+            jobs.clone(),
+        ));
+
+        // Chunk 8B.4: authority monitor keyed by the local coordinator id.
+        let local_id = identity
+            .as_ref()
+            .map(|id| id.node_identity.node_id.clone())
+            .unwrap_or_default();
+        let authority = Arc::new(AuthorityMonitor::new(local_id, peers.clone()));
+
         Ok(Self {
             config,
             registry,
             scheduler,
-            jobs: Arc::new(JobStore::new()),
+            jobs,
             http,
-            identity,
+            identity: Arc::new(std::sync::RwLock::new(identity)),
             lineage: None,
             metrics: Arc::new(FederationMetrics::new()),
             nonce_tracker: Arc::new(NonceTracker::new()),
@@ -132,6 +165,8 @@ impl AppState {
             ops,
             leases,
             peers,
+            worker_gate,
+            authority,
         })
     }
 }
@@ -181,26 +216,32 @@ fn load_coordinator_identity(
     Ok(Some(Arc::new(identity)))
 }
 
+/// Read-lock helper for the identity handle.
+pub fn identity_snapshot(state: &AppState) -> Option<Arc<CoordinatorIdentity>> {
+    state.identity.read().ok().and_then(|guard| guard.clone())
+}
+
+/// Chunk 8B.13: install an updated identity (catch-up / failover adoption).
+pub fn install_identity(state: &AppState, identity: CoordinatorIdentity) {
+    if let Ok(mut guard) = state.identity.write() {
+        *guard = Some(Arc::new(identity));
+    }
+}
+
 /// Shortcut: whether the local coordinator may issue ownership mutations.
 /// Returns false if we are not a coordinator, not active, or revoked.
 pub fn can_issue_mutations(state: &AppState) -> bool {
-    state
-        .identity
-        .as_ref()
-        .map_or(false, |id| id.can_issue_mutations())
+    identity_snapshot(state).map_or(false, |id| id.can_issue_mutations())
 }
 
 /// Shortcut: whether the local coordinator is an authority candidate.
 pub fn is_authority_candidate(state: &AppState) -> bool {
-    state
-        .identity
-        .as_ref()
-        .map_or(false, |id| id.is_authority_candidate())
+    identity_snapshot(state).map_or(false, |id| id.is_authority_candidate())
 }
 
 /// Shortcut: this coordinator's fingerprint, if any.
 pub fn coordinator_fingerprint(state: &AppState) -> Option<String> {
-    state.identity.as_ref().map(|id| id.fingerprint())
+    identity_snapshot(state).map(|id| id.fingerprint())
 }
 
 /// Persist a node snapshot from live metadata (write-through helper).
@@ -419,39 +460,29 @@ pub fn recovered_metadata(row: &NodeStateRow) -> NodeMetadata {
 
 /// The current authority epoch, if we have a coordinator identity.
 pub fn authority_epoch(state: &AppState) -> u64 {
-    state
-        .identity
-        .as_ref()
-        .map_or(0, |id| id.authority_epoch.value())
+    identity_snapshot(state).map_or(0, |id| id.authority_epoch.value())
 }
 
 /// When the current epoch was acquired (millis since unix epoch).
 pub fn epoch_acquired_at_ms(state: &AppState) -> u64 {
-    state
-        .identity
-        .as_ref()
-        .map_or(0, |id| id.epoch_acquired_at_ms)
+    identity_snapshot(state).map_or(0, |id| id.epoch_acquired_at_ms)
 }
 
 /// Trusted peer public keys, if any.
-pub fn trusted_peers(state: &AppState) -> Option<&[String]> {
-    state
-        .identity
-        .as_ref()
-        .map(|id| id.trusted_peers.as_slice())
+pub fn trusted_peers(state: &AppState) -> Vec<String> {
+    identity_snapshot(state)
+        .map(|id| id.trusted_peers.clone())
+        .unwrap_or_default()
 }
 
 /// Replication position, if any.
 pub fn replication_position(state: &AppState) -> u64 {
-    state
-        .identity
-        .as_ref()
-        .map_or(0, |id| id.replication_position)
+    identity_snapshot(state).map_or(0, |id| id.replication_position)
 }
 
 /// Federation state, if any.
-pub fn federation_state(state: &AppState) -> Option<&FederationState> {
-    state.identity.as_ref().map(|id| &id.federation_state)
+pub fn federation_state(state: &AppState) -> Option<FederationState> {
+    identity_snapshot(state).map(|id| id.federation_state.clone())
 }
 
 // ── Replicated lease state ────────────────────────────────────────────────

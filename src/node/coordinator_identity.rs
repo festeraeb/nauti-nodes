@@ -287,6 +287,45 @@ impl CoordinatorIdentity {
         );
     }
 
+    /// Chunk 8B.4: adopt a specific epoch after a deterministic failover
+    /// election. The adopted epoch MUST be strictly greater than the
+    /// current one (monotonic; fail closed otherwise). The coordinator
+    /// becomes ACTIVE (may issue mutations) because it has just acquired
+    /// authority through the election mechanism.
+    pub fn adopt_epoch_as_authority(&mut self, epoch: u64) -> crate::types::Result<()> {
+        if epoch <= self.authority_epoch.value() {
+            return Err(crate::types::Error::Internal(format!(
+                "refusing epoch rollback: adopt {epoch} <= current {}",
+                self.authority_epoch.value()
+            )));
+        }
+        self.authority_epoch = AuthorityEpoch::new(epoch);
+        self.epoch_acquired_at_ms = now_ms();
+        self.federation_state = FederationState::Active;
+        info!(
+            node_id = %self.node_identity.node_id,
+            epoch,
+            "adopted authority epoch after failover election"
+        );
+        Ok(())
+    }
+
+    /// Chunk 8B.13: learn a newer federation epoch as a FOLLOWER (catch-up
+    /// from a peer snapshot). Raises the local epoch floor without granting
+    /// mutation rights: the coordinator stays out of Active state, so
+    /// `can_issue_mutations()` remains false.
+    pub fn adopt_follower_epoch(&mut self, epoch: u64) {
+        if epoch > self.authority_epoch.value() {
+            self.authority_epoch = AuthorityEpoch::new(epoch);
+            self.epoch_acquired_at_ms = now_ms();
+            info!(
+                node_id = %self.node_identity.node_id,
+                epoch,
+                "adopted follower epoch from peer catch-up"
+            );
+        }
+    }
+
     /// Transition to DEGRADED state (e.g. partition detected, health check
     /// failure).  Must NOT issue ownership mutations while degraded.
     pub fn set_degraded(&mut self) {

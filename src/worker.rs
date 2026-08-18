@@ -121,6 +121,20 @@ pub async fn run_worker(config: Config) -> Result<()> {
     println!("Workload Boundary:    PUBLIC ONLY");
     println!("============================================================");
 
+    // Chunk 8B.2: the worker serves the VERSIONED fenced command path.
+    // Ownership-changing commands reach this worker ONLY through
+    // /internal/federation/command as signed, epoch-fenced envelopes.
+    let state = crate::state::AppState::new(config.clone())?;
+    let app = crate::api::routes::router(state);
+    let listen_addr = format!("0.0.0.0:{}", config.listen_port);
+    let listener = tokio::net::TcpListener::bind(&listen_addr)
+        .await
+        .map_err(|e| crate::types::Error::Internal(format!("bind {listen_addr}: {e}")))?;
+    info!(addr = %listen_addr, "worker command endpoint listening (fenced)");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
     let hb_url = format!(
         "{}/internal/worker/heartbeat",
         config.coordinator_url.trim_end_matches('/')

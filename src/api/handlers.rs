@@ -1098,7 +1098,7 @@ pub async fn sync_fleet_now(State(state): State<AppState>) -> Json<serde_json::V
 }
 
 pub async fn node_identity(State(state): State<AppState>) -> Json<serde_json::Value> {
-    match &state.identity {
+    match crate::state::identity_snapshot(&state) {
         Some(id) => {
             let pub_hex: String = id
                 .node_identity
@@ -1124,9 +1124,9 @@ pub async fn node_identity(State(state): State<AppState>) -> Json<serde_json::Va
     }
 }
 
-/// Chunk 8B: federation status. Reports only real local state (identity,
-/// authority epoch, configured/learned peers). Never synthesizes peer or
-/// authority data.
+/// Chunk 8B.14: federation status. Reports only real local state
+/// (identity, authority view, peers, lineage, lease truth, fence
+/// counters). Never synthesizes peer or authority data.
 pub async fn federation_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let peers: Vec<serde_json::Value> = state
         .peers
@@ -1144,9 +1144,49 @@ pub async fn federation_status(State(state): State<AppState>) -> Json<serde_json
         })
         .collect();
 
-    match &state.identity {
+    // Lineage parent/children for the local coordinator id (real store).
+    let (lineage_parent, lineage_children) = match crate::state::identity_snapshot(&state) {
+        Some(id) => match state.lineage.as_ref() {
+            Some(lineage) => {
+                let me = &id.node_identity.node_id;
+                let parent = lineage.parent(me).unwrap_or(None);
+                let children = lineage.children(me).unwrap_or_default();
+                (parent, children)
+            }
+            None => (None, Vec::new()),
+        },
+        None => (None, Vec::new()),
+    };
+
+    let counters = &state.worker_gate.counters;
+    let fence_counters = serde_json::json!({
+        "commands_accepted_total": counters.commands_accepted_total.load(Ordering::SeqCst),
+        "commands_rejected_auth_total": counters.commands_rejected_auth_total.load(Ordering::SeqCst),
+        "commands_rejected_stale_epoch_total": counters
+            .commands_rejected_stale_epoch_total
+            .load(Ordering::SeqCst),
+        "commands_rejected_authority_conflict_total": counters
+            .commands_rejected_authority_conflict_total
+            .load(Ordering::SeqCst),
+        "duplicate_commands_blocked_total": counters
+            .duplicate_commands_blocked_total
+            .load(Ordering::SeqCst),
+        "checkpoint_resumes_total": counters.checkpoint_resumes_total.load(Ordering::SeqCst),
+        "checkpoint_double_resume_blocked_total": counters
+            .checkpoint_double_resume_blocked_total
+            .load(Ordering::SeqCst),
+    });
+
+    match crate::state::identity_snapshot(&state) {
         Some(id) => {
-            let role = crate::federation::CoordinatorRole::from_local_identity(id);
+            let role = crate::federation::CoordinatorRole::from_local_identity(&id);
+            // Current authority view from the election over known records.
+            let local_record = crate::federation::AuthorityRecord {
+                coordinator_id: id.node_identity.node_id.clone(),
+                epoch: id.authority_epoch.value(),
+                acquired_at_ms: id.epoch_acquired_at_ms as i64,
+            };
+            let elected = state.authority.elect(&local_record);
             Json(serde_json::json!({
                 "coordinator_id": id.node_identity.node_id,
                 "is_coordinator": id.is_coordinator,
@@ -1159,7 +1199,16 @@ pub async fn federation_status(State(state): State<AppState>) -> Json<serde_json
                 "trusted_peers": id.trusted_peers,
                 "replication_position": id.replication_position,
                 "last_synced_at_ms": id.last_synced_at_ms,
+                "current_authority": {
+                    "coordinator_id": elected.coordinator_id,
+                    "epoch": elected.epoch,
+                    "acquired_at_ms": elected.acquired_at_ms,
+                },
                 "lease_authority_epoch": state.leases.current_authority_epoch(),
+                "active_leases_known": state.leases.all_active_leases().len(),
+                "lineage_parent": lineage_parent,
+                "lineage_children": lineage_children,
+                "fence_counters": fence_counters,
                 "peers": peers,
             }))
         }
@@ -1168,6 +1217,198 @@ pub async fn federation_status(State(state): State<AppState>) -> Json<serde_json
             "error": "identity not loaded",
             "peers": peers,
         })),
+    }
+}
+
+/// Chunk 8B.4: this coordinator's authority record (probe target).
+/// Real local values only.
+pub async fn federation_authority(State(state): State<AppState>) -> Json<serde_json::Value> {
+    match crate::state::identity_snapshot(&state) {
+        Some(id) => Json(serde_json::json!({
+            "coordinator_id": id.node_identity.node_id,
+            "epoch": id.authority_epoch.value(),
+            "acquired_at_ms": id.epoch_acquired_at_ms as i64,
+        })),
+        None => Json(serde_json::json!({
+            "coordinator_id": null,
+            "epoch": 0,
+            "acquired_at_ms": 0,
+        })),
+    }
+}
+
+/// Chunk 8B.13: snapshot of current federation truth (admin-authenticated).
+pub async fn federation_snapshot_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let snap = crate::federation::snapshot::capture(&state)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    serde_json::to_value(&snap)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FederationCatchupRequest {
+    /// Base URL of the peer coordinator to catch up from.
+    pub peer_url: String,
+}
+
+/// Chunk 8B.13: catch up from a live peer over REAL HTTP. The peer's
+/// snapshot is fetched, then applied; this coordinator becomes a FOLLOWER
+/// at the peer epoch (never an authority). Admin-authenticated.
+pub async fn federation_catchup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FederationCatchupRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let url = format!(
+        "{}/v1/federation/snapshot",
+        req.peer_url.trim_end_matches('/')
+    );
+    // Admin key forwarding: the peer requires admin auth for snapshots.
+    let mut request = state.http.get(&url);
+    if let Some(key) = state.config.admin_key.as_deref() {
+        request = request.header("X-Admin-Key", key);
+    }
+    let resp = request.send().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("catch-up fetch failed: {e}"),
+        )
+    })?;
+    if !resp.status().is_success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("catch-up fetch status {}", resp.status()),
+        ));
+    }
+    let snap: crate::federation::snapshot::FederationSnapshot = resp.json().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("bad snapshot from peer: {e}"),
+        )
+    })?;
+    let report = crate::federation::snapshot::apply(&state, &snap)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Record the catch-up in the real journal.
+    let _ = state.ops.record(
+        OpsEventKind::StateRecovered,
+        None,
+        None,
+        None,
+        None,
+        &format!(
+            "federation catch-up from {} (epoch {}): leases+{} revocations+{} lineage+{} fences+{}",
+            snap.authority_id,
+            snap.epoch,
+            report.leases_imported,
+            report.revocations_imported,
+            report.lineage_imported,
+            report.fences_imported
+        ),
+        "CATCHUP",
+    );
+    Ok(Json(serde_json::json!({
+        "caught_up_from": snap.authority_id,
+        "epoch": snap.epoch,
+        "report": {
+            "leases_imported": report.leases_imported,
+            "leases_skipped_existing": report.leases_skipped_existing,
+            "revocations_imported": report.revocations_imported,
+            "lineage_imported": report.lineage_imported,
+            "lineage_skipped": report.lineage_skipped,
+            "fences_imported": report.fences_imported,
+            "fences_kept_newer_local": report.fences_kept_newer_local,
+            "adopted_follower_epoch": report.adopted_follower_epoch,
+        },
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FederationSendRequest {
+    /// Worker (or peer) base URL that will receive the fenced command.
+    pub target_url: String,
+    /// The command to sign and send.
+    pub command: crate::federation::envelope::FederationCommand,
+}
+
+/// Chunk 8B.2/8B.5: coordinator-side command sender. Signs the command
+/// with THIS coordinator's durable Ed25519 identity and delivers it over
+/// real HTTP to the target's fenced command endpoint. Admin-authenticated.
+pub async fn federation_send_command(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FederationSendRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let id = crate::state::identity_snapshot(&state).ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "identity not loaded".to_string(),
+    ))?;
+    let signing_key = id
+        .node_identity
+        .signing_key()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let pub_hex = hex::encode(&id.node_identity.public_key);
+    let envelope = crate::federation::envelope::SignedFederationCommand::build_signed(
+        &id.node_identity.node_id,
+        &pub_hex,
+        &signing_key,
+        req.command,
+    );
+    let url = format!(
+        "{}/internal/federation/command",
+        req.target_url.trim_end_matches('/')
+    );
+    let resp = state
+        .http
+        .post(&url)
+        .json(&envelope)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("command delivery failed: {e}"),
+            )
+        })?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or_else(|_| serde_json::json!({}));
+    Ok(Json(serde_json::json!({
+        "delivered_status": status.as_u16(),
+        "accepted": status.is_success(),
+        "response": body,
+    })))
+}
+
+/// Chunk 8B.2: versioned fenced command endpoint (worker side).
+///
+/// This is the ONLY command surface that changes ownership state. Every
+/// envelope is authenticated (durable coordinator Ed25519 identity) and
+/// fenced (durable per-resource epoch) before any mutation.
+pub async fn federation_command(
+    State(state): State<AppState>,
+    Json(env): Json<crate::federation::envelope::SignedFederationCommand>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    match state.worker_gate.handle(&env) {
+        Ok(outcome) => Ok(Json(serde_json::json!({
+            "accepted": true,
+            "outcome": format!("{outcome:?}"),
+        }))),
+        Err(reject) => {
+            let status = match &reject {
+                crate::federation::worker_gate::CommandReject::Auth(_) => StatusCode::UNAUTHORIZED,
+                crate::federation::worker_gate::CommandReject::Fence(_) => StatusCode::CONFLICT,
+                crate::federation::worker_gate::CommandReject::Execution(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            };
+            Err((status, reject.to_string()))
+        }
     }
 }
 

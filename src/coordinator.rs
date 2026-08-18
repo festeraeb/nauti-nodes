@@ -34,7 +34,7 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
     state
         .leases
         .set_authority_epoch(coordinator_identity.authority_epoch.value());
-    state.identity = Some(std::sync::Arc::new(coordinator_identity));
+    crate::state::install_identity(&state, coordinator_identity);
     state.lineage = Some(std::sync::Arc::new(lineage));
 
     // Chunk 7: count coordinator restarts observationally (every

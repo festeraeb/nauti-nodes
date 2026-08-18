@@ -227,6 +227,15 @@ pub struct ReservationRow {
     pub settled_at_ms: Option<u64>,
 }
 
+/// Chunk 8B: durable per-resource fence row (highest accepted authority).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FenceRow {
+    pub resource_id: String,
+    pub epoch: u64,
+    pub authority_coordinator_id: String,
+    pub updated_at_ms: u64,
+}
+
 /// Checkpoint registry row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointRow {
@@ -369,6 +378,15 @@ impl OpsStore {
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at_ms INTEGER NOT NULL,
                 consumed_at_ms INTEGER
+            );
+            -- Chunk 8B: durable per-resource fencing fence. Highest accepted
+            -- authority epoch per resource; survives restarts so a fence can
+            -- never roll back.
+            CREATE TABLE IF NOT EXISTS federation_fence (
+                resource_id TEXT PRIMARY KEY,
+                epoch INTEGER NOT NULL,
+                authority_coordinator_id TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
             );
             ",
         )
@@ -1056,6 +1074,82 @@ impl OpsStore {
                 metadata_json: r.get(5)?,
                 created_at_ms: r.get::<_, i64>(6)? as u64,
                 consumed_at_ms: r.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    // ── Chunk 8B: durable federation fences ─────────────────────────────
+
+    /// The durable fence for a resource, if any.
+    pub fn get_fence(&self, resource_id: &str) -> Result<Option<FenceRow>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        match conn.query_row(
+            "SELECT resource_id, epoch, authority_coordinator_id, updated_at_ms
+             FROM federation_fence WHERE resource_id = ?1",
+            params![resource_id],
+            |r| {
+                Ok(FenceRow {
+                    resource_id: r.get(0)?,
+                    epoch: r.get::<_, i64>(1)? as u64,
+                    authority_coordinator_id: r.get(2)?,
+                    updated_at_ms: r.get::<_, i64>(3)? as u64,
+                })
+            },
+        ) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Persist a fence (used when a higher epoch is accepted). Callers must
+    /// only invoke this after the fence gate decided ACCEPT.
+    pub fn upsert_fence(&self, fence: &FenceRow) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO federation_fence (resource_id, epoch, authority_coordinator_id, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(resource_id) DO UPDATE SET
+                epoch = excluded.epoch,
+                authority_coordinator_id = excluded.authority_coordinator_id,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                fence.resource_id,
+                fence.epoch as i64,
+                fence.authority_coordinator_id,
+                fence.updated_at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// All durable fences (snapshot / catch-up + audit).
+    pub fn all_fences(&self) -> Result<Vec<FenceRow>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT resource_id, epoch, authority_coordinator_id, updated_at_ms
+             FROM federation_fence ORDER BY resource_id ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(FenceRow {
+                resource_id: r.get(0)?,
+                epoch: r.get::<_, i64>(1)? as u64,
+                authority_coordinator_id: r.get(2)?,
+                updated_at_ms: r.get::<_, i64>(3)? as u64,
             })
         })?;
         let mut out = Vec::new();
