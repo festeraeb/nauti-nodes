@@ -44,7 +44,9 @@ use std::sync::Arc;
 
 // ── Coordinator identity (Chunk 8) ────────────────────────────────────────
 
+use crate::federation::PeerRegistry;
 use crate::node::coordinator_identity::{CoordinatorIdentity, FederationState};
+use crate::node::identity::NodeIdentity;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -67,6 +69,9 @@ pub struct AppState {
     pub ops: Arc<OpsStore>,
     /// Chunk 7: authoritative Forge lease state machine.
     pub leases: Arc<LeaseManager>,
+    /// Chunk 8B: federation peer registry (seeded from config; filled in by
+    /// real handshakes — never synthetic peer state).
+    pub peers: Arc<PeerRegistry>,
 }
 
 impl AppState {
@@ -100,6 +105,16 @@ impl AppState {
         // Chunk 8: load or generate coordinator identity + federation state.
         let identity = load_coordinator_identity(&config)?;
 
+        // Chunk 8B: keep the lease authority's fencing epoch in sync with
+        // the coordinator identity so lease overlays are stamped with the
+        // real authority epoch (never a hardcoded value).
+        if let Some(id) = identity.as_ref() {
+            leases.set_authority_epoch(id.authority_epoch.value());
+        }
+
+        // Chunk 8B: federation peers from configuration.
+        let peers = Arc::new(PeerRegistry::seed_from_endpoints(&config.federation_peers));
+
         Ok(Self {
             config,
             registry,
@@ -116,28 +131,53 @@ impl AppState {
             external_alpha_enabled,
             ops,
             leases,
+            peers,
         })
     }
 }
 
 // ── Coordinator identity helpers (Chunk 8) ────────────────────────────────
 
-/// Load or generate the coordinator identity from the configured path.
+/// Build the coordinator identity for an already-loaded durable node
+/// identity (Chunk 8B).
+///
+/// - `coordinator_identity_path = Some(path)`: federation membership state
+///   is persisted at `path` and MUST wrap the durable node identity
+///   (identity-split fails closed).
+/// - `coordinator_identity_path = None`: in-memory federation layer only;
+///   no file is written (single-coordinator mode, per the documented
+///   contract in `Config`).
+pub fn coordinator_identity_for(
+    config: &Config,
+    node_identity: &NodeIdentity,
+) -> crate::types::Result<CoordinatorIdentity> {
+    match config.coordinator_identity_path.as_deref() {
+        Some(path) => {
+            CoordinatorIdentity::load_or_create_wrapping(std::path::Path::new(path), node_identity)
+        }
+        None => Ok(CoordinatorIdentity::wrap(node_identity.clone())),
+    }
+}
+
+/// Load or generate the coordinator identity according to the configured
+/// contract (Chunk 8B):
+///
+/// - `NAUTI_COORDINATOR_IDENTITY_PATH` set: persist federation state there,
+///   wrapping the durable node identity from `identity_path`.
+/// - Not set: generate an in-memory identity. NO file is written. (The
+///   previous fallback silently wrote `nauti-coordinator-identity.json`
+///   into the working directory, violating the documented contract and
+///   polluting test runs.)
 fn load_coordinator_identity(
     config: &Config,
 ) -> crate::types::Result<Option<Arc<CoordinatorIdentity>>> {
-    let identity_path = config
-        .coordinator_identity_path
-        .as_deref()
-        .unwrap_or("nauti-coordinator-identity.json");
-
-    let path = std::path::Path::new(identity_path);
-
-    // load_or_create handles both cases: if the file exists it loads and
-    // validates; if not, it generates a fresh identity and persists it
-    // (with 0600 permissions on Unix). This avoids the bug where a
-    // generated identity was never actually written to disk.
-    let identity = CoordinatorIdentity::load_or_create(path)?;
+    if config.coordinator_identity_path.is_some() {
+        let node = NodeIdentity::load_or_create(std::path::Path::new(&config.identity_path))?;
+        let identity = coordinator_identity_for(config, &node)?;
+        return Ok(Some(Arc::new(identity)));
+    }
+    // In-memory only: fresh node identity, no persistence.
+    let identity = CoordinatorIdentity::generate()?;
     Ok(Some(Arc::new(identity)))
 }
 
@@ -429,33 +469,37 @@ pub fn is_lease_epoch_current(lease_epoch: u64, local_epoch: u64) -> bool {
 
 /// Extended eligibility that also checks the ownership epoch fencing.
 /// A node is eligible only if:
-///   • it passes the standard evaluate_node predicate, AND
-///   • any active lease on the node has an epoch >= the local coordinator's epoch.
+///   • any active lease on the node has an epoch >= the local coordinator's
+///     epoch (fencing check runs FIRST so a stale coordinator's lease fails
+///     with an explicit fencing error instead of a generic lease rejection),
+///     AND
+///   • it passes the standard evaluate_node predicate.
 pub fn evaluate_node_with_fencing(
     rt: &crate::types::NodeRuntime,
     local_epoch: u64,
 ) -> crate::types::Result<()> {
-    // Standard eligibility first.
-    crate::eligibility::evaluate_node(rt, crate::types::now_ms(), 45_000)
-        .map_err(|e| crate::types::Error::Internal(format!("node ineligible: {e}")))?;
-
-    // Fencing check: if there is an active lease on this node, its epoch
-    // must be >= the local coordinator's epoch.
-    // This is a metadata check; the actual lease store is consulted by the
-    // scheduler/handler layer.
-    let md = rt
-        .metadata
-        .read()
-        .map_err(|e| crate::types::Error::Internal(format!("read node metadata: {e}")))?;
-    let active_lease = md.active_lease.clone();
-    // If the node reports an active lease, verify its epoch.
-    if let Some(lease) = active_lease {
-        if !is_lease_epoch_current(lease.epoch, local_epoch) {
-            return Err(crate::types::Error::Internal(
-                "node has active lease with stale epoch (stale coordinator)".into(),
-            ));
+    // Fencing check first: if there is an active lease on this node, its
+    // epoch must be >= the local coordinator's epoch. This is a metadata
+    // check; the actual lease store is consulted by the scheduler/handler
+    // layer.
+    {
+        let md = rt
+            .metadata
+            .read()
+            .map_err(|e| crate::types::Error::Internal(format!("read node metadata: {e}")))?;
+        if let Some(lease) = md.active_lease.clone() {
+            if !is_lease_epoch_current(lease.epoch, local_epoch) {
+                return Err(crate::types::Error::Internal(format!(
+                    "node has active lease {} with stale epoch {} < {} (stale coordinator)",
+                    lease.lease_id, lease.epoch, local_epoch
+                )));
+            }
         }
     }
+
+    // Standard eligibility.
+    crate::eligibility::evaluate_node(rt, crate::types::now_ms(), 45_000)
+        .map_err(|e| crate::types::Error::Internal(format!("node ineligible: {e}")))?;
 
     Ok(())
 }

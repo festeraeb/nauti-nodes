@@ -8,6 +8,7 @@ pub mod config;
 pub mod contribution;
 pub mod coordinator;
 pub mod eligibility;
+pub mod federation;
 pub mod fleet;
 pub mod gpu;
 pub mod job_runner;

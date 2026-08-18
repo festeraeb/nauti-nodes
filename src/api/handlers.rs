@@ -1124,6 +1124,53 @@ pub async fn node_identity(State(state): State<AppState>) -> Json<serde_json::Va
     }
 }
 
+/// Chunk 8B: federation status. Reports only real local state (identity,
+/// authority epoch, configured/learned peers). Never synthesizes peer or
+/// authority data.
+pub async fn federation_status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let peers: Vec<serde_json::Value> = state
+        .peers
+        .list()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "coordinator_id": p.coordinator_id,
+                "endpoint": p.endpoint,
+                "role": p.role.as_str(),
+                "public_key_hex": p.public_key_hex,
+                "parent_id": p.parent_id,
+                "last_seen_ms": p.last_seen_ms,
+            })
+        })
+        .collect();
+
+    match &state.identity {
+        Some(id) => {
+            let role = crate::federation::CoordinatorRole::from_local_identity(id);
+            Json(serde_json::json!({
+                "coordinator_id": id.node_identity.node_id,
+                "is_coordinator": id.is_coordinator,
+                "federation_state": format!("{:?}", id.federation_state),
+                "local_role": role.as_str(),
+                "authority_epoch": id.authority_epoch.value(),
+                "epoch_acquired_at_ms": id.epoch_acquired_at_ms,
+                "can_issue_mutations": id.can_issue_mutations(),
+                "fingerprint": id.fingerprint(),
+                "trusted_peers": id.trusted_peers,
+                "replication_position": id.replication_position,
+                "last_synced_at_ms": id.last_synced_at_ms,
+                "lease_authority_epoch": state.leases.current_authority_epoch(),
+                "peers": peers,
+            }))
+        }
+        None => Json(serde_json::json!({
+            "coordinator_id": null,
+            "error": "identity not loaded",
+            "peers": peers,
+        })),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct JoinRequest {
     pub node_id: String,

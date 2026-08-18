@@ -126,6 +126,26 @@ impl CoordinatorIdentity {
         })
     }
 
+    /// Wrap an already-established durable [`crate::node::identity::NodeIdentity`]
+    /// with an in-memory federation layer (Chunk 8B).
+    ///
+    /// No file is written. This is the single-coordinator default: the
+    /// durable node identity remains the root of truth for node_id and
+    /// keys, and federation membership state lives only in memory.
+    pub fn wrap(node_identity: crate::node::identity::NodeIdentity) -> Self {
+        Self {
+            node_identity,
+            is_coordinator: true,
+            federation_state: FederationState::Joining,
+            authority_epoch: AuthorityEpoch::new(0),
+            epoch_acquired_at_ms: now_ms(),
+            trusted_peers: Vec::new(),
+            last_synced_at_ms: 0,
+            replication_position: 0,
+            software_version: std::env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+
     /// Load from a JSON file, or generate and persist a new one.
     ///
     /// The file path is expected to end in `.json` (or no extension).
@@ -161,6 +181,55 @@ impl CoordinatorIdentity {
                 let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
             }
             info!(node_id = %identity.node_identity.node_id, path = %path.display(), "generated new coordinator identity");
+            Ok(identity)
+        }
+    }
+
+    /// Load a persisted coordinator identity that MUST wrap the given
+    /// durable node identity, or create and persist it (Chunk 8B).
+    ///
+    /// Fail closed: if the persisted identity's node_id does not match the
+    /// durable node identity, this is an identity-split and is refused.
+    pub fn load_or_create_wrapping(
+        path: &Path,
+        node_identity: &crate::node::identity::NodeIdentity,
+    ) -> crate::types::Result<Self> {
+        if path.exists() {
+            let data = std::fs::read_to_string(path).map_err(|e| {
+                crate::types::Error::Internal(format!("read coordinator identity: {e}"))
+            })?;
+            let identity: Self = serde_json::from_str(&data).map_err(|e| {
+                crate::types::Error::Internal(format!("parse coordinator identity: {e}"))
+            })?;
+            identity.validate()?;
+            if identity.node_identity.node_id != node_identity.node_id {
+                return Err(crate::types::Error::Internal(format!(
+                    "coordinator identity {} does not wrap durable node identity {}",
+                    identity.node_identity.node_id, node_identity.node_id
+                )));
+            }
+            info!(node_id = %identity.node_identity.node_id, "loaded existing coordinator identity");
+            Ok(identity)
+        } else {
+            let identity = Self::wrap(node_identity.clone());
+            identity.validate()?;
+            let data = serde_json::to_string_pretty(&identity).map_err(|e| {
+                crate::types::Error::Internal(format!("serialize coordinator identity: {e}"))
+            })?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    crate::types::Error::Internal(format!("create coordinator identity dir: {e}"))
+                })?;
+            }
+            std::fs::write(path, &data).map_err(|e| {
+                crate::types::Error::Internal(format!("write coordinator identity: {e}"))
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            }
+            info!(node_id = %identity.node_identity.node_id, path = %path.display(), "generated new coordinator identity wrapping durable node identity");
             Ok(identity)
         }
     }

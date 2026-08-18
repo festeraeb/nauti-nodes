@@ -21,6 +21,7 @@ use crate::eligibility::{ActiveLeaseRef, LeaseState};
 use crate::node::registry::NodeRegistry;
 use crate::opsstore::{LeaseRecord, OpsEventKind, OpsStore};
 use crate::types::now_ms;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
@@ -35,6 +36,13 @@ pub enum LeaseError {
     /// Release request mission/node does not match the active lease.
     Mismatch {
         expected_mission: String,
+    },
+    /// Chunk 8B: the request carries an authority epoch older than the
+    /// local coordinator's current epoch. A stale coordinator must not be
+    /// able to create leases here (fencing token pattern). Fail closed.
+    StaleEpoch {
+        provided: u64,
+        current: u64,
     },
     Store(String),
 }
@@ -53,6 +61,10 @@ impl std::fmt::Display for LeaseError {
             Self::Mismatch { expected_mission } => write!(
                 f,
                 "release does not match active lease (expected mission {expected_mission})"
+            ),
+            Self::StaleEpoch { provided, current } => write!(
+                f,
+                "lease request epoch {provided} is stale (current authority epoch {current})"
             ),
             Self::Store(e) => write!(f, "lease store error: {e}"),
         }
@@ -73,6 +85,11 @@ pub struct LeaseManager {
     store: Arc<OpsStore>,
     /// Serializes lease decision critical sections (reserve/release).
     decision: Mutex<()>,
+    /// Chunk 8B: current local authority epoch (fencing token). Lease
+    /// overlays are stamped with this value; it is advanced monotonically
+    /// by `set_authority_epoch` whenever the coordinator identity's epoch
+    /// changes. Starts at 0 (single-coordinator pre-federation behavior).
+    authority_epoch: Arc<AtomicU64>,
 }
 
 impl LeaseManager {
@@ -80,7 +97,20 @@ impl LeaseManager {
         Self {
             store,
             decision: Mutex::new(()),
+            authority_epoch: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Chunk 8B: publish the coordinator's current authority epoch.
+    /// Monotonic: never moves backwards (fetch_max), so a stale writer
+    /// cannot lower the fencing bar.
+    pub fn set_authority_epoch(&self, epoch: u64) {
+        self.authority_epoch.fetch_max(epoch, Ordering::SeqCst);
+    }
+
+    /// Chunk 8B: the authority epoch currently used to stamp lease refs.
+    pub fn current_authority_epoch(&self) -> u64 {
+        self.authority_epoch.load(Ordering::SeqCst)
     }
 
     fn err(e: crate::types::Error) -> LeaseError {
@@ -117,6 +147,51 @@ impl LeaseManager {
     }
 
     // ── Reserve path ─────────────────────────────────────────────────────
+
+    /// Chunk 8B: fenced reserve entry point for requests that carry an
+    /// authority epoch (federated / multi-coordinator path). A request
+    /// whose epoch is older than the local authority epoch is rejected
+    /// before any state is touched (fencing token pattern). Requests with
+    /// a current epoch proceed through the normal reserve rules.
+    pub fn begin_reserve_fenced(
+        &self,
+        request_epoch: u64,
+        mission_id: &str,
+        node_id: &str,
+        lease_id_hint: Option<&str>,
+        device_id: Option<&str>,
+        vram_mb: u64,
+        priority: u32,
+        allow_preemption: bool,
+    ) -> Result<ReserveOutcome, LeaseError> {
+        let current = self.current_authority_epoch();
+        if !crate::state::is_lease_epoch_current(request_epoch, current) {
+            let _ = self.store.record(
+                OpsEventKind::LeaseConflict,
+                Some(node_id),
+                lease_id_hint,
+                None,
+                Some(mission_id),
+                &format!(
+                    "fenced stale-epoch reserve attempt (provided={request_epoch} current={current})"
+                ),
+                "STALE_EPOCH",
+            );
+            return Err(LeaseError::StaleEpoch {
+                provided: request_epoch,
+                current,
+            });
+        }
+        self.begin_reserve(
+            mission_id,
+            node_id,
+            lease_id_hint,
+            device_id,
+            vram_mb,
+            priority,
+            allow_preemption,
+        )
+    }
 
     /// Begin a lease request. Idempotent for the same (mission_id, node_id)
     /// while a non-terminal lease exists. Conflicting missions fail with
@@ -502,7 +577,8 @@ impl LeaseManager {
                     lease_id: lease.lease_id.clone(),
                     mission_id: lease.mission_id.clone(),
                     state: lease.state,
-                    epoch: 0,
+                    // Chunk 8B: stamp the live authority epoch (fencing).
+                    epoch: self.current_authority_epoch(),
                 });
             }
         }
@@ -518,7 +594,8 @@ impl LeaseManager {
                     lease_id: rec.lease_id.clone(),
                     mission_id: rec.mission_id.clone(),
                     state: rec.state,
-                    epoch: 0,
+                    // Chunk 8B: stamp the live authority epoch (fencing).
+                    epoch: self.current_authority_epoch(),
                 });
             }
         }

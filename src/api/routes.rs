@@ -21,6 +21,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/nodes", get(handlers::list_nodes))
         .route("/v1/node/identity", get(handlers::node_identity))
         .route("/v1/node/join", post(handlers::node_join))
+        // Chunk 8B: federation observability (real local state only).
+        .route("/v1/federation/status", get(handlers::federation_status))
         .route(
             "/v1/admin/reconciliation",
             get(handlers::admin_reconciliation),

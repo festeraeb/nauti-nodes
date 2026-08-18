@@ -25,9 +25,16 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
     lineage.set_root(&identity.node_id)?;
 
     let mut state = AppState::new(config.clone())?;
-    // AppState::new already loads/generates the CoordinatorIdentity
-    // (Chunk 8). The NodeIdentity loaded above is used only for lineage
-    // root registration.
+    // Chunk 8B identity continuity: the advertised coordinator identity
+    // MUST wrap the same durable NodeIdentity that anchors the lineage
+    // root. AppState::new may have generated an in-memory identity (no
+    // coordinator identity path configured); rebuild from the durable
+    // identity so node_id, keys and lineage root remain one truth.
+    let coordinator_identity = crate::state::coordinator_identity_for(&config, &identity)?;
+    state
+        .leases
+        .set_authority_epoch(coordinator_identity.authority_epoch.value());
+    state.identity = Some(std::sync::Arc::new(coordinator_identity));
     state.lineage = Some(std::sync::Arc::new(lineage));
 
     // Chunk 7: count coordinator restarts observationally (every

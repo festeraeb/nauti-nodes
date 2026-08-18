@@ -7,3 +7,5 @@ nauti.db-*
 coordinator.log
 t440_worker.log
 sqlite::memory:
+nauti-coordinator-identity.json
+nauti-identity.json
