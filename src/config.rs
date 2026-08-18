@@ -25,6 +25,15 @@ pub struct Config {
     pub external_alpha_enabled: bool,
     pub is_external_alpha: bool,
     pub admin_key: Option<String>,
+    /// Chunk 8: path to the coordinator identity file (Ed25519 + UUID).
+    /// If None, the coordinator identity is generated in-memory and not
+    /// persisted (single-coordinator mode).
+    pub coordinator_identity_path: Option<String>,
+    /// Chunk 8: trusted coordinator public keys (hex-encoded ed25519).
+    /// Used for federation authentication.
+    pub trusted_coordinator_keys: Vec<String>,
+    /// Chunk 8: federation peer URLs (coordinator base URLs).
+    pub federation_peers: Vec<String>,
 }
 
 impl Default for Config {
@@ -46,6 +55,9 @@ impl Default for Config {
             external_alpha_enabled: true,
             is_external_alpha: true,
             admin_key: None,
+            coordinator_identity_path: None,
+            trusted_coordinator_keys: Vec::new(),
+            federation_peers: Vec::new(),
         }
     }
 }
@@ -124,6 +136,26 @@ impl Config {
         }
         if let Ok(v) = std::env::var("NAUTI_ADMIN_KEY") {
             c.admin_key = Some(v);
+        }
+        // Chunk 8: coordinator identity path.
+        if let Ok(v) = std::env::var("NAUTI_COORDINATOR_IDENTITY_PATH") {
+            c.coordinator_identity_path = Some(v);
+        }
+        // Chunk 8: trusted coordinator public keys (comma-separated hex).
+        if let Ok(v) = std::env::var("NAUTI_TRUSTED_COORDINATOR_KEYS") {
+            c.trusted_coordinator_keys = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        // Chunk 8: federation peer URLs (comma-separated).
+        if let Ok(v) = std::env::var("NAUTI_FEDERATION_PEERS") {
+            c.federation_peers = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
         Ok(c)
     }

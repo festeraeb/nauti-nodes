@@ -502,6 +502,7 @@ impl LeaseManager {
                     lease_id: lease.lease_id.clone(),
                     mission_id: lease.mission_id.clone(),
                     state: lease.state,
+                    epoch: 0,
                 });
             }
         }
@@ -517,6 +518,7 @@ impl LeaseManager {
                     lease_id: rec.lease_id.clone(),
                     mission_id: rec.mission_id.clone(),
                     state: rec.state,
+                    epoch: 0,
                 });
             }
         }

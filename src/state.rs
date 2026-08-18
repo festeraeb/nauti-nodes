@@ -1,3 +1,27 @@
+//! Application state: persistent operational state + lease authority.
+//!
+//! Chunk 7 additions:
+//! - `metrics: Arc<FederationMetrics>` — Arc-shared so handler/task increments
+//!   are not lost across AppState clones (the previous by-value clone snapshot
+//!   was lossy).
+//! - `ops: Arc<OpsStore>` — SQLite-backed persistent operational state store.
+//! - `leases: Arc<LeaseManager>` — authoritative Forge lease state machine.
+//! - `external_alpha_enabled: Arc<AtomicBool>` — operator kill switch.
+//! - `identity: Option<Arc<CoordinatorIdentity>>` — Chunk 8: persistent
+//!   coordinator identity + federation membership + authority epoch.
+//!
+//! Recovery rules (see `recover_operational_state`):
+//! - Do NOT assume workers are immediately online: recovered nodes start
+//!   OFFLINE with runtime Unknown and stale reconciliation. Fresh signed
+//!   heartbeats / re-registration re-establish truth.
+//! - Do NOT assume old runtime processes are alive: PIDs are never persisted
+//!   as truth; runtime_state starts Unknown.
+//! - Do NOT assume hardware is unchanged: MATCH/PARTIAL_MATCH reconciliations
+//!   degrade to STALE until freshly re-observed.
+//! - Active Forge lease ownership IS preserved (granted/leased/releasing/
+//!   recovering); pre-grant leases are marked STALE.
+//! - Orphaned token reservations are refunded exactly once.
+
 use crate::config::Config;
 use crate::eligibility::RuntimeState;
 use crate::jobs::JobStore;
@@ -5,7 +29,6 @@ use crate::lease::LeaseManager;
 use crate::lineage::LineageStore;
 use crate::metrics::FederationMetrics;
 use crate::node::auth::NonceTracker;
-use crate::node::identity::NodeIdentity;
 use crate::node::registry::NodeRegistry;
 use crate::node::revocation::RevocationStore;
 use crate::opsstore::{NodeStateRow, OpsEventKind, OpsStore};
@@ -18,7 +41,10 @@ use crate::types::{
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tracing::{info, warn};
+
+// ── Coordinator identity (Chunk 8) ────────────────────────────────────────
+
+use crate::node::coordinator_identity::{CoordinatorIdentity, FederationState};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -27,7 +53,7 @@ pub struct AppState {
     pub scheduler: Arc<Scheduler>,
     pub jobs: Arc<JobStore>,
     pub http: reqwest::Client,
-    pub identity: Option<Arc<NodeIdentity>>,
+    pub identity: Option<Arc<CoordinatorIdentity>>,
     pub lineage: Option<Arc<LineageStore>>,
     /// Chunk 7: Arc-shared so handler/task increments are not lost across
     /// AppState clones (the previous by-value clone snapshot was lossy).
@@ -71,13 +97,16 @@ impl AppState {
         // fail closed while ownership is uncertain.
         recover_operational_state(&registry, &ops, &leases, &scheduler)?;
 
+        // Chunk 8: load or generate coordinator identity + federation state.
+        let identity = load_coordinator_identity(&config)?;
+
         Ok(Self {
             config,
             registry,
             scheduler,
             jobs: Arc::new(JobStore::new()),
             http,
-            identity: None,
+            identity,
             lineage: None,
             metrics: Arc::new(FederationMetrics::new()),
             nonce_tracker: Arc::new(NonceTracker::new()),
@@ -91,9 +120,85 @@ impl AppState {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Coordinator restart recovery
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Coordinator identity helpers (Chunk 8) ────────────────────────────────
+
+/// Load or generate the coordinator identity from the configured path.
+fn load_coordinator_identity(
+    config: &Config,
+) -> crate::types::Result<Option<Arc<CoordinatorIdentity>>> {
+    let identity_path = config
+        .coordinator_identity_path
+        .as_deref()
+        .unwrap_or("nauti-coordinator-identity.json");
+
+    let path = std::path::Path::new(identity_path);
+
+    // load_or_create handles both cases: if the file exists it loads and
+    // validates; if not, it generates a fresh identity and persists it
+    // (with 0600 permissions on Unix). This avoids the bug where a
+    // generated identity was never actually written to disk.
+    let identity = CoordinatorIdentity::load_or_create(path)?;
+    Ok(Some(Arc::new(identity)))
+}
+
+/// Shortcut: whether the local coordinator may issue ownership mutations.
+/// Returns false if we are not a coordinator, not active, or revoked.
+pub fn can_issue_mutations(state: &AppState) -> bool {
+    state
+        .identity
+        .as_ref()
+        .map_or(false, |id| id.can_issue_mutations())
+}
+
+/// Shortcut: whether the local coordinator is an authority candidate.
+pub fn is_authority_candidate(state: &AppState) -> bool {
+    state
+        .identity
+        .as_ref()
+        .map_or(false, |id| id.is_authority_candidate())
+}
+
+/// Shortcut: this coordinator's fingerprint, if any.
+pub fn coordinator_fingerprint(state: &AppState) -> Option<String> {
+    state.identity.as_ref().map(|id| id.fingerprint())
+}
+
+/// Persist a node snapshot from live metadata (write-through helper).
+pub fn persist_node(ops: &OpsStore, rt: &crate::types::NodeRuntime) {
+    let md = match rt.metadata.read() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let ownership = crate::eligibility::derive_ownership(&md, rt.assigned_jobs_count());
+    let row = NodeStateRow {
+        node_id: md.id.clone(),
+        public_key_hex: hex::encode(&md.public_key),
+        addr: md.addr.clone(),
+        inference_url: md.inference_url.clone(),
+        role: md.role.clone(),
+        gpu_name: md.gpu_name.clone(),
+        vram_mb: md.capabilities.vram_mb,
+        models_json: serde_json::to_string(&md.capabilities.models)
+            .unwrap_or_else(|_| "[]".to_string()),
+        lifecycle_state: md.lifecycle_state.as_str().to_string(),
+        health_state: md.health_state.clone(),
+        ownership: ownership.as_str().to_string(),
+        runtime_state: md.runtime_state.as_str().to_string(),
+        reconciliation_status: format!("{:?}", md.reconciliation.status),
+        claim_json: serde_json::to_string(&md.claim).unwrap_or_else(|_| "{}".to_string()),
+        observed_json: md
+            .observed
+            .as_ref()
+            .and_then(|o| serde_json::to_string(o).ok()),
+        last_heartbeat_ms: Some(rt.last_heartbeat_ms()),
+        last_state_change_ms: md.last_state_change_ms,
+        failure_reason: md.failure_reason.clone(),
+        updated_at_ms: now_ms(),
+    };
+    let _ = ops.upsert_node(&row);
+}
+
+// ── Coordinator restart recovery ─────────────────────────────────────────
 
 fn parse_lifecycle(s: &str) -> NodeLifecycleState {
     match s {
@@ -126,14 +231,10 @@ fn parse_reconciliation(s: &str) -> ReconciliationStatus {
 ///
 /// Recovery rules:
 /// - Do NOT assume workers are immediately online: recovered nodes start
-///   OFFLINE with runtime Unknown and stale reconciliation. Fresh signed
-///   heartbeats / re-registration re-establish truth.
-/// - Do NOT assume old runtime processes are alive: PIDs are never persisted
-///   as truth; runtime_state starts Unknown.
-/// - Do NOT assume hardware is unchanged: MATCH/PARTIAL_MATCH reconciliations
-///   degrade to STALE until freshly re-observed.
-/// - Active Forge lease ownership IS preserved (granted/leased/releasing/
-///   recovering); pre-grant leases are marked STALE.
+///   OFFLINE with runtime Unknown and stale reconciliation.
+/// - Do NOT assume old runtime processes are alive: runtime_state starts Unknown.
+/// - Do NOT assume hardware is unchanged: MATCH/PARTIAL_MATCH -> STALE.
+/// - Active Forge lease ownership IS preserved; pre-grant leases are STALE.
 /// - Orphaned token reservations are refunded exactly once.
 pub fn recover_operational_state(
     registry: &NodeRegistry,
@@ -200,7 +301,7 @@ pub fn recover_operational_state(
             "RECOVERED",
         );
     }
-    info!(
+    tracing::info!(
         recovered_nodes,
         active_leases = kept.len(),
         refunded_reservations = refunded,
@@ -208,7 +309,7 @@ pub fn recover_operational_state(
     );
     if !kept.is_empty() {
         for l in &kept {
-            warn!(
+            tracing::warn!(
                 lease_id = %l.lease_id,
                 node_id = %l.node_id,
                 state = l.state.as_str(),
@@ -274,37 +375,87 @@ pub fn recovered_metadata(row: &NodeStateRow) -> NodeMetadata {
     }
 }
 
-/// Persist a node snapshot from live metadata (write-through helper).
-pub fn persist_node(ops: &OpsStore, rt: &crate::types::NodeRuntime) {
-    let md = match rt.metadata.read() {
-        Ok(m) => m,
-        Err(_) => return,
-    };
-    let ownership = crate::eligibility::derive_ownership(&md, rt.assigned_jobs_count());
-    let row = NodeStateRow {
-        node_id: md.id.clone(),
-        public_key_hex: hex::encode(&md.public_key),
-        addr: md.addr.clone(),
-        inference_url: md.inference_url.clone(),
-        role: md.role.clone(),
-        gpu_name: md.gpu_name.clone(),
-        vram_mb: md.capabilities.vram_mb,
-        models_json: serde_json::to_string(&md.capabilities.models)
-            .unwrap_or_else(|_| "[]".to_string()),
-        lifecycle_state: md.lifecycle_state.as_str().to_string(),
-        health_state: md.health_state.clone(),
-        ownership: ownership.as_str().to_string(),
-        runtime_state: md.runtime_state.as_str().to_string(),
-        reconciliation_status: format!("{:?}", md.reconciliation.status),
-        claim_json: serde_json::to_string(&md.claim).unwrap_or_else(|_| "{}".to_string()),
-        observed_json: md
-            .observed
-            .as_ref()
-            .and_then(|o| serde_json::to_string(o).ok()),
-        last_heartbeat_ms: Some(rt.last_heartbeat_ms()),
-        last_state_change_ms: md.last_state_change_ms,
-        failure_reason: md.failure_reason.clone(),
-        updated_at_ms: now_ms(),
-    };
-    let _ = ops.upsert_node(&row);
+// ── Replicated state accessors ────────────────────────────────────────────
+
+/// The current authority epoch, if we have a coordinator identity.
+pub fn authority_epoch(state: &AppState) -> u64 {
+    state
+        .identity
+        .as_ref()
+        .map_or(0, |id| id.authority_epoch.value())
+}
+
+/// When the current epoch was acquired (millis since unix epoch).
+pub fn epoch_acquired_at_ms(state: &AppState) -> u64 {
+    state
+        .identity
+        .as_ref()
+        .map_or(0, |id| id.epoch_acquired_at_ms)
+}
+
+/// Trusted peer public keys, if any.
+pub fn trusted_peers(state: &AppState) -> Option<&[String]> {
+    state
+        .identity
+        .as_ref()
+        .map(|id| id.trusted_peers.as_slice())
+}
+
+/// Replication position, if any.
+pub fn replication_position(state: &AppState) -> u64 {
+    state
+        .identity
+        .as_ref()
+        .map_or(0, |id| id.replication_position)
+}
+
+/// Federation state, if any.
+pub fn federation_state(state: &AppState) -> Option<&FederationState> {
+    state.identity.as_ref().map(|id| &id.federation_state)
+}
+
+// ── Replicated lease state ────────────────────────────────────────────────
+
+/// Check whether a lease's authority epoch is current relative to the
+/// local coordinator's epoch.  If the lease epoch is stale, the lease
+/// is considered invalid and the node must not be scheduled.
+pub fn is_lease_epoch_current(lease_epoch: u64, local_epoch: u64) -> bool {
+    // Lease is current if its epoch >= local epoch.
+    // (A stale coordinator with a lower epoch cannot grant valid leases.)
+    lease_epoch >= local_epoch
+}
+
+// ── Fail-closed eligibility with fencing ─────────────────────────────────
+
+/// Extended eligibility that also checks the ownership epoch fencing.
+/// A node is eligible only if:
+///   • it passes the standard evaluate_node predicate, AND
+///   • any active lease on the node has an epoch >= the local coordinator's epoch.
+pub fn evaluate_node_with_fencing(
+    rt: &crate::types::NodeRuntime,
+    local_epoch: u64,
+) -> crate::types::Result<()> {
+    // Standard eligibility first.
+    crate::eligibility::evaluate_node(rt, crate::types::now_ms(), 45_000)
+        .map_err(|e| crate::types::Error::Internal(format!("node ineligible: {e}")))?;
+
+    // Fencing check: if there is an active lease on this node, its epoch
+    // must be >= the local coordinator's epoch.
+    // This is a metadata check; the actual lease store is consulted by the
+    // scheduler/handler layer.
+    let md = rt
+        .metadata
+        .read()
+        .map_err(|e| crate::types::Error::Internal(format!("read node metadata: {e}")))?;
+    let active_lease = md.active_lease.clone();
+    // If the node reports an active lease, verify its epoch.
+    if let Some(lease) = active_lease {
+        if !is_lease_epoch_current(lease.epoch, local_epoch) {
+            return Err(crate::types::Error::Internal(
+                "node has active lease with stale epoch (stale coordinator)".into(),
+            ));
+        }
+    }
+
+    Ok(())
 }

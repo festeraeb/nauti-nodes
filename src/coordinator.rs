@@ -25,7 +25,9 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
     lineage.set_root(&identity.node_id)?;
 
     let mut state = AppState::new(config.clone())?;
-    state.identity = Some(std::sync::Arc::new(identity));
+    // AppState::new already loads/generates the CoordinatorIdentity
+    // (Chunk 8). The NodeIdentity loaded above is used only for lineage
+    // root registration.
     state.lineage = Some(std::sync::Arc::new(lineage));
 
     // Chunk 7: count coordinator restarts observationally (every

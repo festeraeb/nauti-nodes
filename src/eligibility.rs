@@ -184,6 +184,9 @@ pub struct ActiveLeaseRef {
     pub lease_id: String,
     pub mission_id: String,
     pub state: LeaseState,
+    /// Chunk 8: authority epoch under which this lease was granted.
+    /// Used for fencing: a stale coordinator's leases are rejected.
+    pub epoch: u64,
 }
 
 /// Why a node/GPU is not eligible for shared work. Fail-closed reasons.
@@ -469,6 +472,7 @@ mod tests {
             lease_id: "l1".into(),
             mission_id: "m1".into(),
             state: LeaseState::Leased,
+            epoch: 0,
         });
         assert_eq!(evaluate_metadata(&md), Err(Ineligibility::ForgeLeased));
 
@@ -536,6 +540,7 @@ mod tests {
             lease_id: "l".into(),
             mission_id: "m".into(),
             state: LeaseState::LeaseGranted,
+            epoch: 0,
         });
         assert_eq!(derive_ownership(&leased, 0), GpuOwnership::ForgeLeased);
 

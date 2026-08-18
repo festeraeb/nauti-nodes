@@ -1100,12 +1100,21 @@ pub async fn sync_fleet_now(State(state): State<AppState>) -> Json<serde_json::V
 pub async fn node_identity(State(state): State<AppState>) -> Json<serde_json::Value> {
     match &state.identity {
         Some(id) => {
-            let pub_hex: String = id.public_key.iter().map(|b| format!("{b:02x}")).collect();
+            let pub_hex: String = id
+                .node_identity
+                .public_key
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             Json(serde_json::json!({
-                "node_id": id.node_id,
+                "node_id": id.node_identity.node_id,
                 "public_key_hex": pub_hex,
-                "created_at_ms": id.created_at_ms,
-                "software_version": id.software_version,
+                "created_at_ms": id.node_identity.created_at_ms,
+                "software_version": id.node_identity.software_version,
+                "federation_state": format!("{:?}", id.federation_state),
+                "authority_epoch": id.authority_epoch.value(),
+                "is_coordinator": id.is_coordinator,
+                "fingerprint": id.fingerprint(),
             }))
         }
         None => Json(serde_json::json!({
