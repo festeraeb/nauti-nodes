@@ -2245,3 +2245,54 @@ pub async fn operator_events(
         "events": events,
     })))
 }
+
+// ── Chunk 10: Provider observability ────────────────────────────────────
+
+use crate::providers::select_provider;
+use crate::providers::ProviderPolicy;
+use crate::providers::ProviderRequest;
+
+/// GET /v1/providers — list all registered providers with health + capabilities.
+pub async fn list_providers(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut providers: Vec<serde_json::Value> = Vec::new();
+    for provider in state.providers.all() {
+        let health = provider
+            .health()
+            .await
+            .unwrap_or_else(|e| crate::providers::ProviderHealth {
+                provider_id: provider.id().to_string(),
+                healthy: false,
+                available: false,
+                last_checked_ms: crate::types::now_ms() as i64,
+                reason: Some(format!("health check failed: {e}")),
+            });
+        let caps = provider.capabilities().await.unwrap_or_else(|e| {
+            crate::providers::ProviderCapabilities {
+                provider_id: provider.id().to_string(),
+                kind: provider.kind(),
+                models: Vec::new(),
+                gpu_vendors: Vec::new(),
+                total_vram_mb: None,
+                privacy_classes: Vec::new(),
+                checkpointable: false,
+                queue_depth: 0,
+                expected_latency_ms: None,
+                cost_units_per_1k_tokens: None,
+            }
+        });
+        providers.push(serde_json::json!({
+            "id": provider.id(),
+            "kind": serde_json::to_string(&caps.kind).unwrap_or_default(),
+            "healthy": health.healthy,
+            "available": health.available,
+            "models": caps.models,
+            "gpu_vendors": caps.gpu_vendors,
+            "total_vram_mb": caps.total_vram_mb,
+            "queue_depth": caps.queue_depth,
+            "reason": health.reason,
+        }));
+    }
+    Ok(Json(serde_json::json!({ "providers": providers })))
+}

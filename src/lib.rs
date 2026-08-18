@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod node;
 pub mod opsstore;
 pub mod preemption;
+pub mod providers;
 pub mod runtime;
 pub mod scheduler;
 pub mod state;

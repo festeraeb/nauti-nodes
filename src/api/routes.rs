@@ -69,6 +69,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/admin/revocations", get(handlers::list_revocations))
         .route("/internal/quotas/set", post(handlers::set_quota_balance))
         .route("/internal/fleet/sync", post(handlers::sync_fleet_now))
+        .route("/v1/providers", get(handlers::list_providers))
         .route("/metrics/prometheus", get(handlers::prometheus_metrics))
         .route("/v1/model/start", post(handlers::model_start))
         .route("/v1/model/stop", post(handlers::model_stop))

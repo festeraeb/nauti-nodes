@@ -52,6 +52,7 @@ use crate::federation::worker_gate::WorkerFenceState;
 use crate::federation::PeerRegistry;
 use crate::node::coordinator_identity::{CoordinatorIdentity, FederationState};
 use crate::node::identity::NodeIdentity;
+use crate::providers::ProviderRegistry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -85,6 +86,8 @@ pub struct AppState {
     pub authority: Arc<AuthorityMonitor>,
     /// Chunk 9: durable delegated-job store (exactly-once across failover).
     pub delegation: Arc<DelegationStore>,
+    /// Chunk 10: pluggable execution provider registry.
+    pub providers: Arc<ProviderRegistry>,
 }
 
 impl AppState {
@@ -154,6 +157,9 @@ impl AppState {
         // Chunk 9: durable delegated-job identity store (exactly-once).
         let delegation = Arc::new(DelegationStore::new(ops.clone()));
 
+        // Chunk 10: pluggable execution provider registry.
+        let providers = Arc::new(ProviderRegistry::new());
+
         Ok(Self {
             config,
             registry,
@@ -174,6 +180,7 @@ impl AppState {
             worker_gate,
             authority,
             delegation,
+            providers,
         })
     }
 }
