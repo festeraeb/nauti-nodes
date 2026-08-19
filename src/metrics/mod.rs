@@ -69,6 +69,51 @@ pub struct FederationMetrics {
     pub jobs_preempted_total: AtomicU64,
     pub jobs_requeued_total: AtomicU64,
     pub coordinator_restarts_total: AtomicU64,
+
+    // --- Chunk 11 provider/federation soak integrity ---
+    /// Stale-epoch fenced commands rejected (control-plane).
+    pub stale_commands_rejected_total: AtomicU64,
+    /// Duplicate executions blocked (work/command idempotency).
+    pub duplicate_executions_blocked_total: AtomicU64,
+    /// Checkpoint double-resume attempts blocked.
+    pub checkpoint_double_resumes_blocked_total: AtomicU64,
+    /// Routing loop detections (federation hop graph).
+    pub routing_loops_detected_total: AtomicU64,
+    /// Provider selection decisions (real select_provider outcomes).
+    pub provider_selections_total: AtomicU64,
+    pub provider_selections_local_total: AtomicU64,
+    pub provider_selections_federated_total: AtomicU64,
+    pub provider_selections_none_total: AtomicU64,
+    pub provider_rejections_policy_total: AtomicU64,
+    pub provider_rejections_health_total: AtomicU64,
+    /// Delegated job accepts / duplicate acks (exactly-once).
+    pub delegated_jobs_accepted_total: AtomicU64,
+    pub delegated_jobs_duplicate_total: AtomicU64,
+}
+
+/// Snapshot of integrity counters used by soak reports (plain u64s).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IntegritySnapshot {
+    pub ownership_conflicts_blocked_total: u64,
+    pub accounting_inconsistencies_total: u64,
+    pub stale_commands_rejected_total: u64,
+    pub duplicate_executions_blocked_total: u64,
+    pub checkpoint_double_resumes_blocked_total: u64,
+    pub routing_loops_detected_total: u64,
+    pub leases_granted_total: u64,
+    pub leases_released_total: u64,
+    pub node_reconnects_total: u64,
+    pub runtime_failures_total: u64,
+    pub jobs_requeued_total: u64,
+    pub coordinator_restarts_total: u64,
+    pub provider_selections_total: u64,
+    pub provider_selections_local_total: u64,
+    pub provider_selections_federated_total: u64,
+    pub provider_selections_none_total: u64,
+    pub provider_rejections_policy_total: u64,
+    pub provider_rejections_health_total: u64,
+    pub delegated_jobs_accepted_total: u64,
+    pub delegated_jobs_duplicate_total: u64,
 }
 
 impl FederationMetrics {
@@ -107,7 +152,105 @@ impl FederationMetrics {
             "jobs_preempted_total": self.jobs_preempted_total.load(Ordering::Relaxed),
             "jobs_requeued_total": self.jobs_requeued_total.load(Ordering::Relaxed),
             "coordinator_restarts_total": self.coordinator_restarts_total.load(Ordering::Relaxed),
+            "stale_commands_rejected_total": self.stale_commands_rejected_total.load(Ordering::Relaxed),
+            "duplicate_executions_blocked_total": self
+                .duplicate_executions_blocked_total
+                .load(Ordering::Relaxed),
+            "checkpoint_double_resumes_blocked_total": self
+                .checkpoint_double_resumes_blocked_total
+                .load(Ordering::Relaxed),
+            "routing_loops_detected_total": self.routing_loops_detected_total.load(Ordering::Relaxed),
+            "provider_selections_total": self.provider_selections_total.load(Ordering::Relaxed),
+            "provider_selections_local_total": self
+                .provider_selections_local_total
+                .load(Ordering::Relaxed),
+            "provider_selections_federated_total": self
+                .provider_selections_federated_total
+                .load(Ordering::Relaxed),
+            "provider_selections_none_total": self
+                .provider_selections_none_total
+                .load(Ordering::Relaxed),
+            "provider_rejections_policy_total": self
+                .provider_rejections_policy_total
+                .load(Ordering::Relaxed),
+            "provider_rejections_health_total": self
+                .provider_rejections_health_total
+                .load(Ordering::Relaxed),
+            "delegated_jobs_accepted_total": self.delegated_jobs_accepted_total.load(Ordering::Relaxed),
+            "delegated_jobs_duplicate_total": self
+                .delegated_jobs_duplicate_total
+                .load(Ordering::Relaxed),
         })
+    }
+
+    /// Integrity counters for soak / ops reports.
+    pub fn integrity_snapshot(&self) -> IntegritySnapshot {
+        IntegritySnapshot {
+            ownership_conflicts_blocked_total: self
+                .ownership_conflicts_blocked_total
+                .load(Ordering::Relaxed),
+            accounting_inconsistencies_total: self
+                .accounting_inconsistencies_total
+                .load(Ordering::Relaxed),
+            stale_commands_rejected_total: self
+                .stale_commands_rejected_total
+                .load(Ordering::Relaxed),
+            duplicate_executions_blocked_total: self
+                .duplicate_executions_blocked_total
+                .load(Ordering::Relaxed),
+            checkpoint_double_resumes_blocked_total: self
+                .checkpoint_double_resumes_blocked_total
+                .load(Ordering::Relaxed),
+            routing_loops_detected_total: self.routing_loops_detected_total.load(Ordering::Relaxed),
+            leases_granted_total: self.leases_granted_total.load(Ordering::Relaxed),
+            leases_released_total: self.leases_released_total.load(Ordering::Relaxed),
+            node_reconnects_total: self.node_reconnects_total.load(Ordering::Relaxed),
+            runtime_failures_total: self.runtime_failures_total.load(Ordering::Relaxed),
+            jobs_requeued_total: self.jobs_requeued_total.load(Ordering::Relaxed),
+            coordinator_restarts_total: self.coordinator_restarts_total.load(Ordering::Relaxed),
+            provider_selections_total: self.provider_selections_total.load(Ordering::Relaxed),
+            provider_selections_local_total: self
+                .provider_selections_local_total
+                .load(Ordering::Relaxed),
+            provider_selections_federated_total: self
+                .provider_selections_federated_total
+                .load(Ordering::Relaxed),
+            provider_selections_none_total: self
+                .provider_selections_none_total
+                .load(Ordering::Relaxed),
+            provider_rejections_policy_total: self
+                .provider_rejections_policy_total
+                .load(Ordering::Relaxed),
+            provider_rejections_health_total: self
+                .provider_rejections_health_total
+                .load(Ordering::Relaxed),
+            delegated_jobs_accepted_total: self
+                .delegated_jobs_accepted_total
+                .load(Ordering::Relaxed),
+            delegated_jobs_duplicate_total: self
+                .delegated_jobs_duplicate_total
+                .load(Ordering::Relaxed),
+        }
+    }
+
+    /// Hard soak invariants: these MUST remain zero for a healthy run.
+    pub fn assert_hard_invariants_zero(&self) -> Result<(), String> {
+        let s = self.integrity_snapshot();
+        let mut bad = Vec::new();
+        // ownership_conflicts_blocked is a *blocked* counter — non-zero means
+        // the guard fired (good). The soak invariant is that dual ownership
+        // never *succeeds*; blocked attempts are expected under contention.
+        // accounting_inconsistencies must be 0.
+        if s.accounting_inconsistencies_total != 0 {
+            bad.push(format!(
+                "accounting_inconsistencies_total={}",
+                s.accounting_inconsistencies_total
+            ));
+        }
+        if !bad.is_empty() {
+            return Err(format!("hard invariant violation: {}", bad.join(", ")));
+        }
+        Ok(())
     }
 
     /// Render all metrics in Prometheus exposition format.
@@ -414,6 +557,47 @@ impl Clone for FederationMetrics {
             jobs_requeued_total: AtomicU64::new(self.jobs_requeued_total.load(Ordering::Relaxed)),
             coordinator_restarts_total: AtomicU64::new(
                 self.coordinator_restarts_total.load(Ordering::Relaxed),
+            ),
+            stale_commands_rejected_total: AtomicU64::new(
+                self.stale_commands_rejected_total.load(Ordering::Relaxed),
+            ),
+            duplicate_executions_blocked_total: AtomicU64::new(
+                self.duplicate_executions_blocked_total
+                    .load(Ordering::Relaxed),
+            ),
+            checkpoint_double_resumes_blocked_total: AtomicU64::new(
+                self.checkpoint_double_resumes_blocked_total
+                    .load(Ordering::Relaxed),
+            ),
+            routing_loops_detected_total: AtomicU64::new(
+                self.routing_loops_detected_total.load(Ordering::Relaxed),
+            ),
+            provider_selections_total: AtomicU64::new(
+                self.provider_selections_total.load(Ordering::Relaxed),
+            ),
+            provider_selections_local_total: AtomicU64::new(
+                self.provider_selections_local_total.load(Ordering::Relaxed),
+            ),
+            provider_selections_federated_total: AtomicU64::new(
+                self.provider_selections_federated_total
+                    .load(Ordering::Relaxed),
+            ),
+            provider_selections_none_total: AtomicU64::new(
+                self.provider_selections_none_total.load(Ordering::Relaxed),
+            ),
+            provider_rejections_policy_total: AtomicU64::new(
+                self.provider_rejections_policy_total
+                    .load(Ordering::Relaxed),
+            ),
+            provider_rejections_health_total: AtomicU64::new(
+                self.provider_rejections_health_total
+                    .load(Ordering::Relaxed),
+            ),
+            delegated_jobs_accepted_total: AtomicU64::new(
+                self.delegated_jobs_accepted_total.load(Ordering::Relaxed),
+            ),
+            delegated_jobs_duplicate_total: AtomicU64::new(
+                self.delegated_jobs_duplicate_total.load(Ordering::Relaxed),
             ),
         }
     }

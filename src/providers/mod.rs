@@ -18,6 +18,7 @@ use crate::api::handlers::InferenceRequest;
 pub use crate::capabilities::PrivacyClass;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -236,21 +237,41 @@ pub fn provider_is_allowed(
 /// 1. Kind preference (local first if prefer_local)
 /// 2. Queue depth (lower is better)
 /// 3. Expected latency (lower is better)
-pub async fn select_provider(
+/// Outcome of a provider selection attempt.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderDecision {
+    pub selected: Option<String>,
+    pub rejections_health: u64,
+    pub rejections_policy: u64,
+}
+
+/// Select the best provider for a request under a policy.
+///
+/// Provider selection is a PRE-ELIGIBILITY filter only: it decides which
+/// provider to try. The provider's own internal path (local scheduler or
+/// federation delegation) remains authoritative for actual assignment.
+///
+/// When `metrics` is provided, selection decisions are recorded into the
+/// shared `FederationMetrics` counters.
+pub async fn select_provider_with_metrics(
     registry: &ProviderRegistry,
     request: &ProviderRequest,
     policy: &ProviderPolicy,
-) -> anyhow::Result<Option<Arc<dyn ExecutionProvider>>> {
+    metrics: Option<&crate::metrics::FederationMetrics>,
+) -> anyhow::Result<(Option<Arc<dyn ExecutionProvider>>, ProviderDecision)> {
     let mut candidates = Vec::new();
+    let mut decision = ProviderDecision::default();
 
     for provider in registry.all() {
         let health = provider.health().await?;
         if !health.healthy || !health.available {
+            decision.rejections_health += 1;
             continue;
         }
 
         let caps = provider.capabilities().await?;
         if !provider_is_allowed(&caps, request, policy) {
+            decision.rejections_policy += 1;
             continue;
         }
 
@@ -267,12 +288,72 @@ pub async fn select_provider(
             caps.queue_depth,
             caps.expected_latency_ms.unwrap_or(u64::MAX),
             provider.clone(),
+            provider.id().to_string(),
+            match caps.kind {
+                ProviderKind::LocalWorker => ProviderChoice::Local,
+                ProviderKind::FederatedWorker => ProviderChoice::Federated,
+                _ => ProviderChoice::Other,
+            },
         ));
     }
 
     candidates.sort_by_key(|x| (x.0, x.1, x.2));
 
-    Ok(candidates.into_iter().next().map(|x| x.3))
+    let result = candidates.into_iter().next();
+    if let Some((_, _, _, _, id, choice)) = &result {
+        decision.selected = Some(id.clone());
+    }
+
+    if let Some(metrics) = metrics {
+        metrics
+            .provider_selections_total
+            .fetch_add(1, Ordering::Relaxed);
+        match decision.selected {
+            Some(_) if matches!(result.as_ref().map(|x| x.5), Some(ProviderChoice::Local)) => {
+                metrics
+                    .provider_selections_local_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Some(_) => {
+                metrics
+                    .provider_selections_federated_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            None => {
+                metrics
+                    .provider_selections_none_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        metrics
+            .provider_rejections_policy_total
+            .fetch_add(decision.rejections_policy, Ordering::Relaxed);
+        metrics
+            .provider_rejections_health_total
+            .fetch_add(decision.rejections_health, Ordering::Relaxed);
+    }
+
+    Ok((result.map(|x| x.3), decision))
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProviderChoice {
+    #[default]
+    None,
+    Local,
+    Federated,
+    Other,
+}
+
+/// Select the best provider for a request under a policy.
+pub async fn select_provider(
+    registry: &ProviderRegistry,
+    request: &ProviderRequest,
+    policy: &ProviderPolicy,
+) -> anyhow::Result<Option<Arc<dyn ExecutionProvider>>> {
+    select_provider_with_metrics(registry, request, policy, None)
+        .await
+        .map(|r| r.0)
 }
 
 #[cfg(test)]

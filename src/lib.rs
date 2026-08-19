@@ -22,6 +22,7 @@ pub mod preemption;
 pub mod providers;
 pub mod runtime;
 pub mod scheduler;
+pub mod soak;
 pub mod state;
 pub mod types;
 pub mod work;
