@@ -8,6 +8,7 @@
 //!   refunded exactly once at startup.
 
 use crate::adapter::llama;
+use crate::contribution::ContributionLedger;
 use crate::jobs::{JobRecord, JobStore};
 use crate::metrics::FederationMetrics;
 use crate::opsstore::{OpsEventKind, OpsStore};
@@ -28,8 +29,15 @@ pub fn spawn_job(
     ops: Arc<OpsStore>,
     preemption: Arc<PreemptionManager>,
     metrics: Arc<FederationMetrics>,
+    contributions: Arc<ContributionLedger>,
 ) {
     tokio::spawn(async move {
+        // Chunk 12: accepted work unit + durable contribution record
+        // (donated work survives coordinator restarts).
+        contributions.update(&record.node_id, |r| {
+            r.record_accept();
+        });
+        contributions.flush_node(&ops, &record.node_id);
         let cancelled = record.cancelled.clone();
         let tx = record.tx.clone();
         let url = record.inference_url.clone();
@@ -96,6 +104,22 @@ pub fn spawn_job(
                         &format!("used={used_estimate} refund={refund}"),
                         final_state,
                     );
+                    // Chunk 12: durable per-node contribution accounting.
+                    // compute/gpu time is not measured at the proxy layer
+                    // (worker-side measurement would be authoritative); we
+                    // credit units + validation for the work actually
+                    // performed by this coordinator.
+                    if failed {
+                        contributions.update(&node_id, |r| {
+                            r.record_failure();
+                        });
+                    } else {
+                        contributions.update(&node_id, |r| {
+                            r.record_completion(0.0, 0.0, 0, used_estimate);
+                            r.record_validation_success();
+                        });
+                    }
+                    contributions.flush_node(&ops, &node_id);
                     if failed {
                         metrics.failed_work_units.fetch_add(1, Ordering::Relaxed);
                     } else {

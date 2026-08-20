@@ -95,6 +95,11 @@ pub fn router(state: AppState) -> Router {
         // Chunk 7: operator fleet observability (admin-authenticated).
         .route("/v1/operator/fleet", get(handlers::operator_fleet_status))
         .route("/v1/operator/events", get(handlers::operator_events))
+        // Chunk 12: durable per-node contribution accounting.
+        .route(
+            "/v1/operator/contributions",
+            get(handlers::operator_contributions),
+        )
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

@@ -262,6 +262,24 @@ pub struct CheckpointRow {
     pub consumed_at_ms: Option<u64>,
 }
 
+/// Chunk 12: durable per-node contribution row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContributionRow {
+    pub node_id: String,
+    pub accepted_work_units: u64,
+    pub completed_work_units: u64,
+    pub failed_work_units: u64,
+    pub compute_seconds: f64,
+    pub gpu_seconds: f64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub result_validation_success: u64,
+    pub uptime_seconds: f64,
+    pub first_seen_ms: u64,
+    pub last_active_ms: u64,
+    pub updated_at_ms: u64,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Store
 // ─────────────────────────────────────────────────────────────────────────────
@@ -410,6 +428,23 @@ impl OpsStore {
                 ownership_epoch INTEGER NOT NULL,
                 created_at_ms INTEGER NOT NULL,
                 completed_at_ms INTEGER
+            );
+            -- Chunk 12: durable per-node contribution accounting. The ledger
+            -- survives coordinator restarts so donated work is never lost.
+            CREATE TABLE IF NOT EXISTS contribution (
+                node_id TEXT PRIMARY KEY,
+                accepted_work_units INTEGER NOT NULL DEFAULT 0,
+                completed_work_units INTEGER NOT NULL DEFAULT 0,
+                failed_work_units INTEGER NOT NULL DEFAULT 0,
+                compute_seconds REAL NOT NULL DEFAULT 0,
+                gpu_seconds REAL NOT NULL DEFAULT 0,
+                bytes_in INTEGER NOT NULL DEFAULT 0,
+                bytes_out INTEGER NOT NULL DEFAULT 0,
+                result_validation_success INTEGER NOT NULL DEFAULT 0,
+                uptime_seconds REAL NOT NULL DEFAULT 0,
+                first_seen_ms INTEGER NOT NULL,
+                last_active_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL
             );
             ",
         )
@@ -1252,6 +1287,88 @@ impl OpsStore {
                 epoch: r.get::<_, i64>(1)? as u64,
                 authority_coordinator_id: r.get(2)?,
                 updated_at_ms: r.get::<_, i64>(3)? as u64,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    // ── Chunk 12: durable contribution ledger ────────────────────────────
+
+    /// Insert or replace a node's contribution row.
+    pub fn upsert_contribution(&self, row: &ContributionRow) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO contribution (
+                node_id, accepted_work_units, completed_work_units, failed_work_units,
+                compute_seconds, gpu_seconds, bytes_in, bytes_out, result_validation_success,
+                uptime_seconds, first_seen_ms, last_active_ms, updated_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+             ON CONFLICT(node_id) DO UPDATE SET
+                accepted_work_units = excluded.accepted_work_units,
+                completed_work_units = excluded.completed_work_units,
+                failed_work_units = excluded.failed_work_units,
+                compute_seconds = excluded.compute_seconds,
+                gpu_seconds = excluded.gpu_seconds,
+                bytes_in = excluded.bytes_in,
+                bytes_out = excluded.bytes_out,
+                result_validation_success = excluded.result_validation_success,
+                uptime_seconds = excluded.uptime_seconds,
+                first_seen_ms = excluded.first_seen_ms,
+                last_active_ms = excluded.last_active_ms,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                row.node_id,
+                row.accepted_work_units as i64,
+                row.completed_work_units as i64,
+                row.failed_work_units as i64,
+                row.compute_seconds,
+                row.gpu_seconds,
+                row.bytes_in as i64,
+                row.bytes_out as i64,
+                row.result_validation_success as i64,
+                row.uptime_seconds,
+                row.first_seen_ms,
+                row.last_active_ms,
+                row.updated_at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load all durable contribution rows.
+    pub fn load_contributions(&self) -> Result<Vec<ContributionRow>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT node_id, accepted_work_units, completed_work_units, failed_work_units,
+                    compute_seconds, gpu_seconds, bytes_in, bytes_out, result_validation_success,
+                    uptime_seconds, first_seen_ms, last_active_ms, updated_at_ms
+             FROM contribution ORDER BY node_id ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ContributionRow {
+                node_id: r.get(0)?,
+                accepted_work_units: r.get::<_, i64>(1)? as u64,
+                completed_work_units: r.get::<_, i64>(2)? as u64,
+                failed_work_units: r.get::<_, i64>(3)? as u64,
+                compute_seconds: r.get(4)?,
+                gpu_seconds: r.get(5)?,
+                bytes_in: r.get::<_, i64>(6)? as u64,
+                bytes_out: r.get::<_, i64>(7)? as u64,
+                result_validation_success: r.get::<_, i64>(8)? as u64,
+                uptime_seconds: r.get(9)?,
+                first_seen_ms: r.get::<_, i64>(10)? as u64,
+                last_active_ms: r.get::<_, i64>(11)? as u64,
+                updated_at_ms: r.get::<_, i64>(12)? as u64,
             })
         })?;
         let mut out = Vec::new();

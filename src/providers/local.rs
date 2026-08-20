@@ -172,7 +172,8 @@ impl ExecutionProvider for LocalWorkerProvider {
                 true,
             ));
 
-        // Spawn the job.
+        // Spawn the job. Chunk 12: durable contribution ledger shares the
+        // job lifecycle (accepted/completed/failed work units).
         crate::job_runner::spawn_job(
             self.state.http.clone(),
             self.state.jobs.clone(),
@@ -183,6 +184,7 @@ impl ExecutionProvider for LocalWorkerProvider {
             self.state.ops.clone(),
             self.state.preemption.clone(),
             self.state.metrics.clone(),
+            self.state.contributions.clone(),
         );
 
         Ok(ProviderJob {

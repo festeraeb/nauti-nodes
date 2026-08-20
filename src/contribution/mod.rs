@@ -143,6 +143,76 @@ impl ContributionLedger {
     pub fn all_records(&self) -> Vec<ContributionRecord> {
         self.records.iter().map(|r| r.value().clone()).collect()
     }
+
+    /// Chunk 12: load the ledger from durable rows (coordinator restart).
+    pub fn load_from_rows(&self, rows: Vec<crate::opsstore::ContributionRow>) {
+        for row in rows {
+            let rec = ContributionRecord {
+                node_id: row.node_id,
+                accepted_work_units: row.accepted_work_units,
+                completed_work_units: row.completed_work_units,
+                failed_work_units: row.failed_work_units,
+                compute_seconds: row.compute_seconds,
+                gpu_seconds: row.gpu_seconds,
+                bytes_in: row.bytes_in,
+                bytes_out: row.bytes_out,
+                result_validation_success: row.result_validation_success,
+                uptime_seconds: row.uptime_seconds,
+                first_seen_ms: row.first_seen_ms,
+                last_active_ms: row.last_active_ms,
+            };
+            self.records.insert(rec.node_id.clone(), rec);
+        }
+    }
+
+    /// Chunk 12: snapshot the ledger as durable rows for persistence.
+    pub fn to_rows(&self) -> Vec<crate::opsstore::ContributionRow> {
+        self.all_records()
+            .into_iter()
+            .map(|r| crate::opsstore::ContributionRow {
+                node_id: r.node_id,
+                accepted_work_units: r.accepted_work_units,
+                completed_work_units: r.completed_work_units,
+                failed_work_units: r.failed_work_units,
+                compute_seconds: r.compute_seconds,
+                gpu_seconds: r.gpu_seconds,
+                bytes_in: r.bytes_in,
+                bytes_out: r.bytes_out,
+                result_validation_success: r.result_validation_success,
+                uptime_seconds: r.uptime_seconds,
+                first_seen_ms: r.first_seen_ms,
+                last_active_ms: r.last_active_ms,
+                updated_at_ms: crate::types::now_ms(),
+            })
+            .collect()
+    }
+
+    /// Chunk 12: snapshot a single node's contribution as a durable row.
+    pub fn get_row(&self, node_id: &str) -> Option<crate::opsstore::ContributionRow> {
+        let r = self.get(node_id)?;
+        Some(crate::opsstore::ContributionRow {
+            node_id: r.node_id,
+            accepted_work_units: r.accepted_work_units,
+            completed_work_units: r.completed_work_units,
+            failed_work_units: r.failed_work_units,
+            compute_seconds: r.compute_seconds,
+            gpu_seconds: r.gpu_seconds,
+            bytes_in: r.bytes_in,
+            bytes_out: r.bytes_out,
+            result_validation_success: r.result_validation_success,
+            uptime_seconds: r.uptime_seconds,
+            first_seen_ms: r.first_seen_ms,
+            last_active_ms: r.last_active_ms,
+            updated_at_ms: crate::types::now_ms(),
+        })
+    }
+
+    /// Chunk 12: flush a single node's contribution row to the durable store.
+    pub fn flush_node(&self, ops: &crate::opsstore::OpsStore, node_id: &str) {
+        if let Some(row) = self.get_row(node_id) {
+            let _ = ops.upsert_contribution(&row);
+        }
+    }
 }
 
 impl Default for ContributionLedger {
@@ -205,5 +275,25 @@ mod tests {
         let r = ledger.get("node-1").unwrap();
         assert_eq!(r.accepted_work_units, 1);
         assert_eq!(r.completed_work_units, 1);
+    }
+
+    #[test]
+    fn ledger_durable_roundtrip() {
+        let ops = crate::opsstore::OpsStore::open("sqlite::memory:").unwrap();
+        let ledger = ContributionLedger::new();
+        ledger.update("node-1", |r| {
+            r.record_accept();
+            r.record_completion(10.0, 5.0, 1024, 2048);
+        });
+        ledger.flush_node(&ops, "node-1");
+        assert_eq!(ops.load_contributions().unwrap().len(), 1);
+
+        // Reload into a fresh ledger (simulates coordinator restart).
+        let recovered = ContributionLedger::new();
+        recovered.load_from_rows(ops.load_contributions().unwrap());
+        let r = recovered.get("node-1").unwrap();
+        assert_eq!(r.completed_work_units, 1);
+        assert_eq!(r.bytes_in, 1024);
+        assert_eq!(r.last_active_ms, r.last_active_ms);
     }
 }

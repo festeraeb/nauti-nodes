@@ -23,6 +23,7 @@
 //! - Orphaned token reservations are refunded exactly once.
 
 use crate::config::Config;
+use crate::contribution::ContributionLedger;
 use crate::eligibility::RuntimeState;
 use crate::jobs::JobStore;
 use crate::lease::LeaseManager;
@@ -88,6 +89,8 @@ pub struct AppState {
     pub delegation: Arc<DelegationStore>,
     /// Chunk 10: pluggable execution provider registry.
     pub providers: Arc<ProviderRegistry>,
+    /// Chunk 12: durable per-node contribution ledger (survives restart).
+    pub contributions: Arc<ContributionLedger>,
 }
 
 impl AppState {
@@ -160,6 +163,12 @@ impl AppState {
         // Chunk 10: pluggable execution provider registry.
         let providers = Arc::new(ProviderRegistry::new());
 
+        // Chunk 12: durable contribution ledger. Load persisted rows so
+        // donated work survives coordinator restarts.
+        let contributions = Arc::new(ContributionLedger::new());
+        let persisted = ops.load_contributions()?;
+        contributions.load_from_rows(persisted);
+
         Ok(Self {
             config,
             registry,
@@ -181,6 +190,7 @@ impl AppState {
             authority,
             delegation,
             providers,
+            contributions,
         })
     }
 }

@@ -281,6 +281,7 @@ pub async fn inference(
     let _ = state
         .ops
         .open_reservation(&job_id, &api_key, reserve_tokens);
+    // Chunk 12: durable contribution ledger shares the job lifecycle.
     job_runner::spawn_job(
         state.http.clone(),
         state.jobs.clone(),
@@ -291,6 +292,7 @@ pub async fn inference(
         state.ops.clone(),
         state.preemption.clone(),
         state.metrics.clone(),
+        state.contributions.clone(),
     );
 
     if !req.stream {
@@ -2243,6 +2245,59 @@ pub async fn operator_events(
     Ok(Json(serde_json::json!({
         "count": events.len(),
         "events": events,
+    })))
+}
+
+/// Chunk 12: per-node contribution accounting (admin-authenticated).
+/// Reports donated work that survives coordinator restarts.
+pub async fn operator_contributions(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin_auth(&headers, &state.config)?;
+    let records = state.contributions.all_records();
+    let mut total_completed = 0u64;
+    let mut total_compute_secs = 0.0f64;
+    let mut total_gpu_secs = 0.0f64;
+    let mut total_bytes = 0u64;
+    let mut total_validations = 0u64;
+
+    let nodes: Vec<serde_json::Value> = records
+        .iter()
+        .map(|r| {
+            total_completed += r.completed_work_units;
+            total_compute_secs += r.compute_seconds;
+            total_gpu_secs += r.gpu_seconds;
+            total_bytes += r.bytes_in + r.bytes_out;
+            total_validations += r.result_validation_success;
+            serde_json::json!({
+                "node_id": r.node_id,
+                "accepted_work_units": r.accepted_work_units,
+                "completed_work_units": r.completed_work_units,
+                "failed_work_units": r.failed_work_units,
+                "compute_seconds": r.compute_seconds,
+                "gpu_seconds": r.gpu_seconds,
+                "bytes_in": r.bytes_in,
+                "bytes_out": r.bytes_out,
+                "result_validation_success": r.result_validation_success,
+                "uptime_seconds": r.uptime_seconds,
+                "first_seen_ms": r.first_seen_ms,
+                "last_active_ms": r.last_active_ms,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "generated_at_ms": now_ms(),
+        "nodes": nodes,
+        "summary": {
+            "nodes_total": records.len(),
+            "total_completed_work_units": total_completed,
+            "total_compute_seconds": total_compute_secs,
+            "total_gpu_seconds": total_gpu_secs,
+            "total_bytes": total_bytes,
+            "total_result_validation_success": total_validations,
+        },
     })))
 }
 
