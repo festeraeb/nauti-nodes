@@ -212,6 +212,7 @@ impl CompilerMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::now_ms;
 
     #[test]
     fn test_compiler_memory_roundtrip() {

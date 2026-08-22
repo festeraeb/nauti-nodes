@@ -12,6 +12,7 @@ pub mod federation;
 pub mod fleet;
 pub mod gpu;
 pub mod index;
+pub mod injector;
 pub mod job_runner;
 pub mod jobs;
 pub mod lease;
