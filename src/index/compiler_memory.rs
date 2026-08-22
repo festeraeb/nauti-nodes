@@ -207,6 +207,123 @@ impl CompilerMemoryStore {
         }
         Ok(results)
     }
+
+    /// Lists all compiler incidents in the store.
+    pub fn list_all_incidents(&self) -> Result<Vec<CompilerIncident>, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT incident_id, repository_id, rustc_version, error_codes, diagnostic,
+                        affected_symbol_ids, failing_commit, fixing_commit, verified_fixed, recorded_at_ms
+                 FROM compiler_incidents
+                 ORDER BY recorded_at_ms DESC",
+            )
+            .map_err(crate::types::Error::Db)?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let error_codes_raw: String = row.get(3)?;
+                let symbol_ids_raw: String = row.get(5)?;
+                let verified_int: i32 = row.get(8)?;
+
+                Ok(CompilerIncident {
+                    incident_id: row.get(0)?,
+                    repository_id: row.get(1)?,
+                    rustc_version: row.get(2)?,
+                    error_codes: serde_json::from_str(&error_codes_raw).unwrap_or_default(),
+                    diagnostic: row.get(4)?,
+                    affected_symbol_ids: serde_json::from_str(&symbol_ids_raw).unwrap_or_default(),
+                    failing_commit: row.get(6)?,
+                    fixing_commit: row.get(7)?,
+                    verified_fixed: verified_int == 1,
+                    recorded_at_ms: row.get(9)?,
+                })
+            })
+            .map_err(crate::types::Error::Db)?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r.map_err(crate::types::Error::Db)?);
+        }
+        Ok(results)
+    }
+
+    /// Purges unverified compiler incidents older than `max_age_ms`.
+    pub fn purge_stale_unverified(
+        &self,
+        max_age_ms: u64,
+        current_time_ms: u64,
+    ) -> Result<usize, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let cutoff = current_time_ms.saturating_sub(max_age_ms);
+        let deleted = conn
+            .execute(
+                "DELETE FROM compiler_incidents WHERE verified_fixed = 0 AND recorded_at_ms < ?1",
+                params![cutoff],
+            )
+            .map_err(crate::types::Error::Db)?;
+        Ok(deleted)
+    }
+
+    /// Deletes a specific compiler incident by ID.
+    pub fn delete_incident(&self, incident_id: &str) -> Result<bool, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn
+            .execute(
+                "DELETE FROM compiler_incidents WHERE incident_id = ?1",
+                params![incident_id],
+            )
+            .map_err(crate::types::Error::Db)?;
+        Ok(count > 0)
+    }
+
+    /// Updates diagnostic and metadata for an existing incident.
+    pub fn update_incident(&self, incident: &CompilerIncident) -> Result<(), crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE compiler_incidents SET
+                rustc_version = ?1,
+                error_codes = ?2,
+                diagnostic = ?3,
+                affected_symbol_ids = ?4,
+                failing_commit = ?5,
+                fixing_commit = ?6,
+                verified_fixed = ?7,
+                recorded_at_ms = ?8
+             WHERE incident_id = ?9",
+            params![
+                incident.rustc_version,
+                serde_json::to_string(&incident.error_codes).unwrap_or_default(),
+                incident.diagnostic,
+                serde_json::to_string(&incident.affected_symbol_ids).unwrap_or_default(),
+                incident.failing_commit,
+                incident.fixing_commit,
+                if incident.verified_fixed { 1 } else { 0 },
+                incident.recorded_at_ms,
+                incident.incident_id,
+            ],
+        )
+        .map_err(crate::types::Error::Db)?;
+        Ok(())
+    }
+
+    /// Returns the total count of compiler incidents in the store.
+    pub fn count_incidents(&self) -> Result<usize, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM compiler_incidents", [], |row| {
+                row.get(0)
+            })
+            .map_err(crate::types::Error::Db)?;
+        Ok(count as usize)
+    }
+
+    /// Executes VACUUM on the SQLite connection.
+    pub fn vacuum(&self) -> Result<(), crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("VACUUM", []).map_err(crate::types::Error::Db)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

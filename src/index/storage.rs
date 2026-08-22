@@ -293,6 +293,109 @@ impl StructuralStorage {
         }
         Ok(results)
     }
+
+    /// Purges orphaned chunks whose symbol_id is no longer present in structural_symbols.
+    pub fn purge_orphaned_chunks(&self) -> Result<usize, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn
+            .execute(
+                "DELETE FROM structural_chunks WHERE symbol_id NOT IN (SELECT symbol_id FROM structural_symbols)",
+                [],
+            )
+            .map_err(crate::types::Error::Db)?;
+        Ok(deleted)
+    }
+
+    /// Lists all code symbols in the database.
+    pub fn list_all_symbols(&self) -> Result<Vec<CodeSymbol>, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT symbol_id, repository_id, relative_path, language, qualified_name,
+                        kind, start_byte, end_byte, start_line, end_line, signature,
+                        parent_symbol_id, content_hash, doc_comment, visibility
+                 FROM structural_symbols ORDER BY repository_id, relative_path, start_line",
+            )
+            .map_err(crate::types::Error::Db)?;
+
+        let rows = stmt
+            .query_map([], parse_symbol_row)
+            .map_err(crate::types::Error::Db)?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r.map_err(crate::types::Error::Db)?);
+        }
+        Ok(results)
+    }
+
+    /// Lists all stored symbol chunks in the database.
+    pub fn list_all_chunks(&self) -> Result<Vec<SymbolChunk>, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT chunk_id, symbol_id, repository_id, relative_path, qualified_name,
+                        kind, signature, doc_comment, body, start_line, end_line, token_count, content_hash
+                 FROM structural_chunks ORDER BY repository_id, relative_path, start_line",
+            )
+            .map_err(crate::types::Error::Db)?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let kind_str: String = row.get(5)?;
+                Ok(SymbolChunk {
+                    chunk_id: row.get(0)?,
+                    symbol_id: row.get(1)?,
+                    repository_id: row.get(2)?,
+                    relative_path: row.get(3)?,
+                    qualified_name: row.get(4)?,
+                    kind: parse_kind(&kind_str),
+                    signature: row.get(6)?,
+                    doc_comment: row.get(7)?,
+                    body: row.get(8)?,
+                    start_line: row.get::<_, i64>(9)? as usize,
+                    end_line: row.get::<_, i64>(10)? as usize,
+                    token_count: row.get::<_, i64>(11)? as usize,
+                    content_hash: row.get(12)?,
+                })
+            })
+            .map_err(crate::types::Error::Db)?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r.map_err(crate::types::Error::Db)?);
+        }
+        Ok(results)
+    }
+
+    /// Returns the total count of symbols stored.
+    pub fn count_symbols(&self) -> Result<usize, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM structural_symbols", [], |row| {
+                row.get(0)
+            })
+            .map_err(crate::types::Error::Db)?;
+        Ok(count as usize)
+    }
+
+    /// Returns the total count of chunks stored.
+    pub fn count_chunks(&self) -> Result<usize, crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM structural_chunks", [], |row| {
+                row.get(0)
+            })
+            .map_err(crate::types::Error::Db)?;
+        Ok(count as usize)
+    }
+
+    /// Executes VACUUM on the database connection.
+    pub fn vacuum(&self) -> Result<(), crate::types::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("VACUUM", []).map_err(crate::types::Error::Db)?;
+        Ok(())
+    }
 }
 
 fn parse_kind(s: &str) -> SymbolKind {

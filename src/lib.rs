@@ -11,6 +11,7 @@ pub mod eligibility;
 pub mod federation;
 pub mod fleet;
 pub mod gpu;
+pub mod hygiene;
 pub mod index;
 pub mod injector;
 pub mod job_runner;
