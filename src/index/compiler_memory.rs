@@ -20,6 +20,7 @@ pub struct CompilerIncident {
 }
 
 /// Durable SQLite-backed store for compiler incidents and repair history.
+#[derive(Clone)]
 pub struct CompilerMemoryStore {
     conn: Arc<Mutex<Connection>>,
 }

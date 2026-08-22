@@ -81,4 +81,32 @@ impl AgentIntent {
             }
         }
     }
+
+    /// Returns the static string name of the intent variant.
+    pub fn intent_name(&self) -> &'static str {
+        match self {
+            Self::InspectFile { .. } => "InspectFile",
+            Self::InspectSymbol { .. } => "InspectSymbol",
+            Self::FindCallers { .. } => "FindCallers",
+            Self::ResolveCompilerError { .. } => "ResolveCompilerError",
+            Self::InvestigateTestFailure { .. } => "InvestigateTestFailure",
+            Self::VerifyInvariant { .. } => "VerifyInvariant",
+            Self::PrepareReview { .. } => "PrepareReview",
+        }
+    }
+
+    /// Returns the primary target symbol or identifier for the intent.
+    pub fn target_symbol(&self) -> String {
+        match self {
+            Self::InspectFile { path } => path.clone(),
+            Self::InspectSymbol { qualified_name } => qualified_name.clone(),
+            Self::FindCallers { symbol } => symbol.clone(),
+            Self::ResolveCompilerError { error_code, .. } => {
+                error_code.clone().unwrap_or_else(|| "compiler_error".into())
+            }
+            Self::InvestigateTestFailure { test_name, .. } => test_name.clone(),
+            Self::VerifyInvariant { description } => description.clone(),
+            Self::PrepareReview { changed_files } => changed_files.first().cloned().unwrap_or_default(),
+        }
+    }
 }

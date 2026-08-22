@@ -7,6 +7,7 @@ use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex};
 
 /// Structural index store backed by SQLite relational tables and sidecar vectors.
+#[derive(Clone)]
 pub struct StructuralStorage {
     conn: Arc<Mutex<Connection>>,
 }

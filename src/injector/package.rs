@@ -58,6 +58,32 @@ impl ContextPackage {
         }
     }
 
+    /// Convenience builder from retrieved results and intent.
+    pub fn build(
+        intent: &AgentIntent,
+        retrieved_results: Vec<RetrievalResult>,
+        delivery_mode: DeliveryMode,
+    ) -> Self {
+        let mut compiler_incidents = Vec::new();
+        let mut related_tests = Vec::new();
+
+        for r in &retrieved_results {
+            compiler_incidents.extend(r.compiler_incidents.clone());
+            if r.kind == crate::index::SymbolKind::Test {
+                related_tests.push(r.qualified_name.clone());
+            }
+        }
+
+        Self::new(
+            intent.clone(),
+            delivery_mode,
+            retrieved_results,
+            compiler_incidents,
+            related_tests,
+            10,
+        )
+    }
+
     /// Marks the package as consumed by the primary agent role.
     pub fn mark_consumed(&mut self) {
         self.consumed = true;

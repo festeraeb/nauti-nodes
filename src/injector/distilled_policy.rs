@@ -315,6 +315,23 @@ impl DistilledPolicy {
         }
     }
 
+    /// Returns a recommendation on whether the plan can be executed on fast-path.
+    pub fn recommend_policy_action(&self, intent: &AgentIntent) -> PolicyRecommendation {
+        let plan = self.plan_for_intent(intent);
+        if plan.confidence_score >= self.promotion_confidence_threshold {
+            PolicyRecommendation::PromoteToFastPath
+        } else if plan.confidence_score >= 0.40 {
+            PolicyRecommendation::KeepInShadow
+        } else {
+            PolicyRecommendation::RetrainRequired
+        }
+    }
+
+    /// Helper for reading symbol query weight.
+    pub fn get_symbol_weight(&self) -> f64 {
+        self.get_action_weight("QuerySymbol")
+    }
+
     fn get_action_weight(&self, key: &str) -> f64 {
         if let Some(entry) = self.action_weights.get(key) {
             entry.load(Ordering::Relaxed) as f64 / 1000.0
