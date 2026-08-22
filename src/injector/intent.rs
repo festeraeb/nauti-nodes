@@ -53,4 +53,32 @@ impl AgentIntent {
             Self::PrepareReview { changed_files } => changed_files.join(" "),
         }
     }
+
+    /// Provides a human-readable summary of the intent.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::InspectFile { path } => format!("Inspect file {}", path),
+            Self::InspectSymbol { qualified_name } => format!("Inspect symbol {}", qualified_name),
+            Self::FindCallers { symbol } => format!("Find callers of {}", symbol),
+            Self::ResolveCompilerError {
+                error_code,
+                diagnostic,
+            } => {
+                if let Some(code) = error_code {
+                    format!("Resolve compiler error [{}] {}", code, diagnostic)
+                } else {
+                    format!("Resolve compiler error {}", diagnostic)
+                }
+            }
+            Self::InvestigateTestFailure { test_name, .. } => {
+                format!("Investigate test failure {}", test_name)
+            }
+            Self::VerifyInvariant { description } => {
+                format!("Verify invariant {}", description)
+            }
+            Self::PrepareReview { changed_files } => {
+                format!("Prepare review for {} files", changed_files.len())
+            }
+        }
+    }
 }
