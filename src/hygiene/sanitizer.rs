@@ -91,9 +91,7 @@ impl EvidenceSanitizer {
                 next.push_str(&rem[..pos]);
                 let rest = &rem[pos..];
                 let key_end = rest
-                    .find(|c: char| {
-                        !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.'
-                    })
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
                     .unwrap_or(rest.len());
                 let key_candidate = &rest[..key_end];
 

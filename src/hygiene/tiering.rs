@@ -54,7 +54,10 @@ impl EvidenceArchiveBundle {
             incidents.len()
         );
         for s in &symbols {
-            payload.push_str(&format!(":sym:{}:{}:{}", s.symbol_id, s.qualified_name, s.content_hash));
+            payload.push_str(&format!(
+                ":sym:{}:{}:{}",
+                s.symbol_id, s.qualified_name, s.content_hash
+            ));
         }
         for c in &chunks {
             payload.push_str(&format!(":chunk:{}:{}", c.chunk_id, c.content_hash));
@@ -88,7 +91,10 @@ impl EvidenceArchiveBundle {
             self.incidents.len()
         );
         for s in &self.symbols {
-            payload.push_str(&format!(":sym:{}:{}:{}", s.symbol_id, s.qualified_name, s.content_hash));
+            payload.push_str(&format!(
+                ":sym:{}:{}:{}",
+                s.symbol_id, s.qualified_name, s.content_hash
+            ));
         }
         for c in &self.chunks {
             payload.push_str(&format!(":chunk:{}:{}", c.chunk_id, c.content_hash));
@@ -165,7 +171,11 @@ impl ScalableStorageManager {
 
         info!(
             "Exported evidence bundle {} for repository {}: {} symbols, {} chunks, {} incidents",
-            bundle.bundle_id, repository_id, bundle.symbols.len(), bundle.chunks.len(), bundle.incidents.len()
+            bundle.bundle_id,
+            repository_id,
+            bundle.symbols.len(),
+            bundle.chunks.len(),
+            bundle.incidents.len()
         );
 
         Ok(bundle)
@@ -186,7 +196,9 @@ impl ScalableStorageManager {
     }
 
     /// Reads and parses a bundle from disk.
-    pub fn load_bundle_from_file(path: &Path) -> Result<EvidenceArchiveBundle, crate::types::Error> {
+    pub fn load_bundle_from_file(
+        path: &Path,
+    ) -> Result<EvidenceArchiveBundle, crate::types::Error> {
         let raw = std::fs::read_to_string(path).map_err(|e| {
             crate::types::Error::Internal(format!("Failed to read bundle file: {e}"))
         })?;
@@ -221,12 +233,7 @@ impl ScalableStorageManager {
 
         let mut symbols_imported = 0;
         for (path, syms) in by_file {
-            storage.upsert_file_symbols(
-                &bundle.repository_id,
-                &path,
-                "imported_bundle",
-                &syms,
-            )?;
+            storage.upsert_file_symbols(&bundle.repository_id, &path, "imported_bundle", &syms)?;
             symbols_imported += syms.len();
         }
 

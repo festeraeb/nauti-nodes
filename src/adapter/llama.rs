@@ -31,6 +31,7 @@ struct StreamChoice {
 #[derive(Debug, Deserialize)]
 struct StreamDelta {
     content: Option<String>,
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,7 +100,8 @@ pub async fn stream_chat(
                     if let Some(choices) = chunk.choices {
                         for c in choices {
                             if let Some(delta) = c.delta {
-                                if let Some(text) = delta.content {
+                                let text = delta.content.or(delta.reasoning_content);
+                                if let Some(text) = text {
                                     if !text.is_empty() {
                                         on_delta(text)?;
                                     }

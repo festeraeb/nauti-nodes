@@ -4,8 +4,8 @@ use nauti_nodes::hygiene::{
     EvidenceHygieneEngine, EvidenceSanitizer, HygienePolicy, ScalableStorageManager,
 };
 use nauti_nodes::index::{
-    CodeSymbol, CompilerIncident, CompilerMemoryStore, SimpleCodeTokenizer,
-    StructuralStorage, SymbolChunk, SymbolKind,
+    CodeSymbol, CompilerIncident, CompilerMemoryStore, SimpleCodeTokenizer, StructuralStorage,
+    SymbolChunk, SymbolKind,
 };
 use tempfile::NamedTempFile;
 
@@ -48,11 +48,20 @@ fn test_evidence_sanitizer_removes_secrets_and_paths() {
 
     // 2. Test symbol sanitization
     let mut sym = create_sample_symbol("s1", "auth", "src/auth.rs", 10);
-    sym.doc_comment = Some("Connects to Google API using AIzaSyD-1234567890abcdefghijklmnopqrst".into());
+    sym.doc_comment =
+        Some("Connects to Google API using AIzaSyD-1234567890abcdefghijklmnopqrst".into());
     let sanitized_sym = sanitizer.sanitize_symbol(&sym);
 
-    assert!(!sanitized_sym.doc_comment.as_ref().unwrap().contains("AIzaSyD"));
-    assert!(sanitized_sym.doc_comment.as_ref().unwrap().contains("[REDACTED_GOOGLE_API_KEY]"));
+    assert!(!sanitized_sym
+        .doc_comment
+        .as_ref()
+        .unwrap()
+        .contains("AIzaSyD"));
+    assert!(sanitized_sym
+        .doc_comment
+        .as_ref()
+        .unwrap()
+        .contains("[REDACTED_GOOGLE_API_KEY]"));
 }
 
 #[test]
@@ -81,7 +90,9 @@ fn test_hygiene_cycle_orphan_purging_and_ttl_expiration() {
 
     storage.store_chunk(&chunk1, None).expect("store c1");
     storage.store_chunk(&chunk2, None).expect("store c2");
-    storage.store_chunk(&chunk_orphan, None).expect("store orphan");
+    storage
+        .store_chunk(&chunk_orphan, None)
+        .expect("store orphan");
 
     assert_eq!(storage.count_chunks().unwrap(), 3);
 
@@ -91,14 +102,18 @@ fn test_hygiene_cycle_orphan_purging_and_ttl_expiration() {
         repository_id: "test-repo".into(),
         rustc_version: "1.80".into(),
         error_codes: vec!["E0308".into()],
-        diagnostic: "mismatched types in /home/user/code/foo.rs with key sk-999999999999999999999999999".into(),
+        diagnostic:
+            "mismatched types in /home/user/code/foo.rs with key sk-999999999999999999999999999"
+                .into(),
         affected_symbol_ids: vec!["s1".into()],
         failing_commit: Some("c1".into()),
         fixing_commit: None,
         verified_fixed: false,
         recorded_at_ms: 1000, // Very old
     };
-    compiler_mem.record_incident(&old_incident).expect("record old");
+    compiler_mem
+        .record_incident(&old_incident)
+        .expect("record old");
 
     // Add verified incident (must NOT be purged regardless of age)
     let verified_incident = CompilerIncident {
@@ -113,12 +128,16 @@ fn test_hygiene_cycle_orphan_purging_and_ttl_expiration() {
         verified_fixed: true,
         recorded_at_ms: 1000,
     };
-    compiler_mem.record_incident(&verified_incident).expect("record verified");
+    compiler_mem
+        .record_incident(&verified_incident)
+        .expect("record verified");
 
     let policy = HygienePolicy::strict_test_policy();
     let engine = EvidenceHygieneEngine::new(policy);
 
-    let report = engine.run_hygiene_cycle(&storage, &compiler_mem).expect("hygiene cycle");
+    let report = engine
+        .run_hygiene_cycle(&storage, &compiler_mem)
+        .expect("hygiene cycle");
 
     // Assert orphan was purged
     assert_eq!(report.orphaned_chunks_purged, 1);
@@ -164,7 +183,9 @@ fn test_incident_deduplication_and_compaction() {
     policy.ttl_unverified_incidents_ms = 1_000_000_000_000; // Far future TTL
     let engine = EvidenceHygieneEngine::new(policy);
 
-    let report = engine.run_hygiene_cycle(&storage, &compiler_mem).expect("hygiene cycle");
+    let report = engine
+        .run_hygiene_cycle(&storage, &compiler_mem)
+        .expect("hygiene cycle");
 
     assert_eq!(report.duplicate_incidents_compacted, 2);
     assert_eq!(compiler_mem.count_incidents().unwrap(), 1);
@@ -223,7 +244,9 @@ fn test_evidence_archive_bundle_export_import_cryptographic_verification() {
         verified_fixed: true,
         recorded_at_ms: 1700000000000,
     };
-    compiler_mem_src.record_incident(&incident).expect("record incident");
+    compiler_mem_src
+        .record_incident(&incident)
+        .expect("record incident");
 
     let manager = ScalableStorageManager::new(HygienePolicy::default());
 
@@ -242,7 +265,8 @@ fn test_evidence_archive_bundle_export_import_cryptographic_verification() {
     let temp_file = NamedTempFile::new().expect("temp file");
     ScalableStorageManager::save_bundle_to_file(&bundle, temp_file.path()).expect("save bundle");
 
-    let loaded_bundle = ScalableStorageManager::load_bundle_from_file(temp_file.path()).expect("load bundle");
+    let loaded_bundle =
+        ScalableStorageManager::load_bundle_from_file(temp_file.path()).expect("load bundle");
     assert!(loaded_bundle.verify_integrity());
     assert_eq!(loaded_bundle.manifest_sha256, bundle.manifest_sha256);
 

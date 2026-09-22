@@ -394,7 +394,8 @@ impl StructuralStorage {
     /// Executes VACUUM on the database connection.
     pub fn vacuum(&self) -> Result<(), crate::types::Error> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("VACUUM", []).map_err(crate::types::Error::Db)?;
+        conn.execute("VACUUM", [])
+            .map_err(crate::types::Error::Db)?;
         Ok(())
     }
 }

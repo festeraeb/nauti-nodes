@@ -96,11 +96,12 @@ impl ClosedLoopEngine {
         let mut recorded_incident_id = None;
         if let Some(diag) = &task.error_diagnostic {
             let inc_id = format!("inc-{}", Uuid::new_v4());
-            let error_code = if let AgentIntent::ResolveCompilerError { error_code, .. } = &task.intent {
-                error_code.clone().unwrap_or_else(|| "E_UNKNOWN".into())
-            } else {
-                "E_UNKNOWN".into()
-            };
+            let error_code =
+                if let AgentIntent::ResolveCompilerError { error_code, .. } = &task.intent {
+                    error_code.clone().unwrap_or_else(|| "E_UNKNOWN".into())
+                } else {
+                    "E_UNKNOWN".into()
+                };
 
             let incident = CompilerIncident {
                 incident_id: inc_id.clone(),
@@ -126,7 +127,8 @@ impl ClosedLoopEngine {
         let retrieved_results = self.injector.execute_plan(&retrieval_plan).await;
 
         // 4. Construct Context Package
-        let context_package = ContextPackage::build(&task.intent, retrieved_results, DeliveryMode::Inline);
+        let context_package =
+            ContextPackage::build(&task.intent, retrieved_results, DeliveryMode::Inline);
 
         // 5. Evaluate execution / fix outcome
         let mut execution_success = false;
@@ -170,7 +172,8 @@ impl ClosedLoopEngine {
                         record.record_validation_success();
                     });
 
-                contribution_receipt_id = Some(format!("rcpt-{}-{}", task.task_id, fix_result.commit_hash));
+                contribution_receipt_id =
+                    Some(format!("rcpt-{}-{}", task.task_id, fix_result.commit_hash));
             } else {
                 // Record failure in contribution accounting
                 self.contribution_ledger

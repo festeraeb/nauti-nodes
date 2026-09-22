@@ -101,12 +101,14 @@ impl AgentIntent {
             Self::InspectFile { path } => path.clone(),
             Self::InspectSymbol { qualified_name } => qualified_name.clone(),
             Self::FindCallers { symbol } => symbol.clone(),
-            Self::ResolveCompilerError { error_code, .. } => {
-                error_code.clone().unwrap_or_else(|| "compiler_error".into())
-            }
+            Self::ResolveCompilerError { error_code, .. } => error_code
+                .clone()
+                .unwrap_or_else(|| "compiler_error".into()),
             Self::InvestigateTestFailure { test_name, .. } => test_name.clone(),
             Self::VerifyInvariant { description } => description.clone(),
-            Self::PrepareReview { changed_files } => changed_files.first().cloned().unwrap_or_default(),
+            Self::PrepareReview { changed_files } => {
+                changed_files.first().cloned().unwrap_or_default()
+            }
         }
     }
 }

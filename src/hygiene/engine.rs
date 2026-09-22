@@ -76,10 +76,8 @@ impl EvidenceHygieneEngine {
         };
 
         // 4. Purge stale unverified incidents past TTL or quota limit
-        let mut stale_incidents_expired = compiler_mem.purge_stale_unverified(
-            self.policy.ttl_unverified_incidents_ms,
-            current_time_ms,
-        )?;
+        let mut stale_incidents_expired = compiler_mem
+            .purge_stale_unverified(self.policy.ttl_unverified_incidents_ms, current_time_ms)?;
 
         // Enforce max_unverified_per_error_code limit
         stale_incidents_expired += self.enforce_error_code_quotas(compiler_mem)?;

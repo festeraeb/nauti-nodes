@@ -3,8 +3,8 @@
 use nauti_nodes::closed_loop::{ClosedLoopEngine, EngineeringTask, FixResult};
 use nauti_nodes::contribution::ContributionLedger;
 use nauti_nodes::index::{
-    CodeSymbol, CompilerMemoryStore, HybridRetriever, SimpleCodeTokenizer,
-    StructuralStorage, SymbolChunk, SymbolKind,
+    CodeSymbol, CompilerMemoryStore, HybridRetriever, SimpleCodeTokenizer, StructuralStorage,
+    SymbolChunk, SymbolKind,
 };
 use nauti_nodes::injector::{
     AgentIntent, AnticipatoryInjector, DistilledPolicy, OutcomeFeedbackStore, OutcomeType,
@@ -19,8 +19,10 @@ async fn setup_closed_loop_engine() -> (
     Arc<ContributionLedger>,
 ) {
     let storage = Arc::new(StructuralStorage::open("sqlite::memory:").expect("storage"));
-    let compiler_mem = Arc::new(CompilerMemoryStore::open("sqlite::memory:").expect("compiler memory"));
-    let feedback_store = Arc::new(OutcomeFeedbackStore::open("sqlite::memory:").expect("feedback store"));
+    let compiler_mem =
+        Arc::new(CompilerMemoryStore::open("sqlite::memory:").expect("compiler memory"));
+    let feedback_store =
+        Arc::new(OutcomeFeedbackStore::open("sqlite::memory:").expect("feedback store"));
     let contribution_ledger = Arc::new(ContributionLedger::new());
 
     let policy = Arc::new(DistilledPolicy::default());
@@ -45,7 +47,13 @@ async fn setup_closed_loop_engine() -> (
         contribution_ledger.clone(),
     ));
 
-    (engine, storage, compiler_mem, feedback_store, contribution_ledger)
+    (
+        engine,
+        storage,
+        compiler_mem,
+        feedback_store,
+        contribution_ledger,
+    )
 }
 
 fn seed_symbol(storage: &StructuralStorage, repo: &str, file: &str, name: &str) -> CodeSymbol {
@@ -92,7 +100,9 @@ async fn test_closed_loop_compiler_error_recovery_and_learning() {
             error_code: Some("E0308".into()),
             diagnostic: "mismatched types: expected bool, found &str in verify_token".into(),
         },
-        error_diagnostic: Some("mismatched types: expected bool, found &str in verify_token".into()),
+        error_diagnostic: Some(
+            "mismatched types: expected bool, found &str in verify_token".into(),
+        ),
         target_files: vec!["src/auth.rs".into()],
         initiator_node_id: "node-gpu-01".into(),
     };
@@ -120,7 +130,10 @@ async fn test_closed_loop_compiler_error_recovery_and_learning() {
     let incidents = compiler_mem.find_by_error_code("E0308").unwrap();
     assert_eq!(incidents.len(), 1);
     assert!(incidents[0].verified_fixed);
-    assert_eq!(incidents[0].fixing_commit.as_deref(), Some("commit_fix_100"));
+    assert_eq!(
+        incidents[0].fixing_commit.as_deref(),
+        Some("commit_fix_100")
+    );
 
     // 3. Assert outcome feedback store recorded the helpful consumption
     let feedback = feedback_store.list_records(100).unwrap();
@@ -274,7 +287,12 @@ async fn test_closed_loop_concurrent_task_execution() {
         setup_closed_loop_engine().await;
 
     for i in 0..10 {
-        seed_symbol(&storage, "repo-concurrency", &format!("src/mod_{i}.rs"), &format!("fn_{i}"));
+        seed_symbol(
+            &storage,
+            "repo-concurrency",
+            &format!("src/mod_{i}.rs"),
+            &format!("fn_{i}"),
+        );
     }
 
     let mut handles = Vec::new();
@@ -315,7 +333,9 @@ async fn test_closed_loop_concurrent_task_execution() {
 
     // Verify all 3 worker nodes received contributions
     for w in 0..3 {
-        let rec = contribution_ledger.get(&format!("node-worker-{w}")).unwrap();
+        let rec = contribution_ledger
+            .get(&format!("node-worker-{w}"))
+            .unwrap();
         assert!(rec.completed_work_units >= 3);
     }
 }
