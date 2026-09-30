@@ -350,4 +350,59 @@ Status legend:
 
 ---
 
+## Issue 002-series — planner port, gated on the Fleet F-series
+
+The Python planner in `fleet/` (`/codebase/repos/cesaropsserver/fleet/`) is the
+reference. `fleet/MILESTONES.md` is the authoritative gate list; this section
+mirrors the slice that maps onto each Rust issue so neither side drifts.
+
+| Issue | Fleet gate | Rust work | Status |
+|---|---|---|---|
+| 002a | **F1 CLOSED** | `src/fleet/merge.rs` — port `merge_snapshots` | NOT_STARTED |
+| 002b | **F2 CLOSED** | `src/fleet/scope.rs` — port `Scope` + `gpus_in_scope` | NOT_STARTED |
+| 002c | **F3 OPEN** | `scheduler/escalation.rs` — `escalate()` | NOT_STARTED |
+| 002d | **F4 OPEN** | head endpoint returning a plan fragment | NOT_STARTED |
+| 002e | **F5 OPEN** | `FleetPlanner` trait, monolithic vs federated | NOT_STARTED |
+
+### Issue 002a — port snapshot merge
+
+| field | value |
+|---|---|
+| **CURRENT** | No merge exists in Rust. A node can only describe itself. |
+| **TARGET** | `src/fleet/merge.rs` with `pub fn merge_snapshots(snaps: &[AwarenessSnapshot]) -> AwarenessSnapshot`, mirroring the Python: dedupe by `identity`, fresher `taken_at` wins whole, host lists deduped union, empty input yields an empty snapshot not `None`. |
+| **FILES LIKELY AFFECTED** | new `src/fleet/merge.rs`, new `src/fleet/mod.rs`, `src/lib.rs` |
+| **REFERENCE** | `fleet/awareness.py` `merge_snapshots`, `fleet/tests/test_merge.py` |
+| **RISKS** | Field order differing from Python, making golden comparison brittle. Compare as sets, not sequences. |
+| **TEST** | Port the five merge cases as `#[test]`s; `cargo test -p nauti-nodes merge` passes |
+| **ROLLBACK** | delete `src/fleet/`, revert the `lib.rs` module line |
+| **STATUS** | **NOT_STARTED** |
+
+### Issue 002b — port planning scope
+
+| field | value |
+|---|---|
+| **CURRENT** | No scope concept; the planner would only ever see one node. |
+| **TARGET** | `src/fleet/scope.rs` with `pub enum Scope { Local, Fleet }` and `pub fn gpus_in_scope(snap: &AwarenessSnapshot, scope: Scope, node_id: Option<&str>) -> Vec<GpuAwareness>`. Then add `scope` to the Rust `compute_plan`, defaulted so existing call sites are unchanged. A golden test proves a Local-scope plan equals the pre-change output. |
+| **FILES LIKELY AFFECTED** | new `src/fleet/scope.rs`, the Rust planner |
+| **REFERENCE** | `fleet/scope.py`, `fleet/awareness.py` `compute_plan` |
+| **RISKS** | Defaulting to Fleet instead of Local would silently widen a local plan. Local must be the explicit opt-in. |
+| **TEST** | `cargo test -p nauti-nodes scope`; golden equality against the pre-change plan |
+| **ROLLBACK** | revert the parameter; it is keyword-only and defaulted |
+| **STATUS** | **NOT_STARTED** |
+
+### Issue 002c — escalation seam
+
+| field | value |
+|---|---|
+| **CURRENT** | `scheduler/affinity.rs` scores nodes but never reports that it cannot satisfy a role. |
+| **TARGET** | `escalate(plan, snap, role) -> Option<Escalation>`, non-`None` only on a hard-constraint violation. Local plan is always attempted first; escalation is never a preference. |
+| **FILES LIKELY AFFECTED** | new `src/scheduler/escalation.rs` |
+| **REFERENCE** | `fleet/policy.py` F3, `fleet/awareness.py` `_is_hard_constraint_violation` |
+| **RISKS** | Escalating on preference instead of constraint would turn the fleet into a chatty loop. |
+| **TEST** | unit: fitting plan → `None`; violating plan → `Some` with the constraint named |
+| **ROLLBACK** | caller ignores the return value, same as F3's Python carve-out |
+| **STATUS** | **NOT_STARTED** |
+
+---
+
 ## Stop
