@@ -11,6 +11,7 @@ pub mod coordinator;
 pub mod eligibility;
 pub mod federation;
 pub mod fleet;
+pub mod fleetplan;
 pub mod gpu;
 pub mod hygiene;
 pub mod index;
