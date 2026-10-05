@@ -1,4 +1,5 @@
 pub mod affinity;
+pub mod escalation;
 pub mod fairness;
 pub mod lineage_scheduler;
 pub mod pull;

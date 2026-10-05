@@ -10,8 +10,11 @@
 //!   002e planner   → [`planner`]    (F5 — swappable FleetPlanner trait)
 //!   002c escalate  → [`crate::scheduler::escalation`] (F3 — hard-constraint escalation)
 
+pub mod merge;
 pub mod planner;
 pub mod scope;
+
+pub use merge::{merge_snapshots, AwarenessSnapshot, GpuAwareness};
 
 pub use planner::{
     FederatedPerNodePlanner, FleetPlanner, MonolithicMoEPlanner, PlanFragmentSpec,
