@@ -46,6 +46,25 @@ impl Default for LemonadeConfig {
     }
 }
 
+/// Lemonade 11.9 JSON health endpoint (`/health` is the HTML web UI).
+const HEALTH_PATH: &str = "/api/v1/health";
+/// Lemonade 11.9 load endpoint. `/v1/models/load` does not exist (404).
+const LOAD_PATH: &str = "/api/v1/load";
+
+/// Request body for `POST /api/v1/load`. Lemonade requires `model_name`;
+/// a `model` key is rejected with HTTP 400 ("type must be string, but is null").
+fn load_body(model_id: &str) -> serde_json::Value {
+    serde_json::json!({ "model_name": model_id })
+}
+
+/// Map a `/api/v1/health` JSON body to a health state.
+fn health_from_json(json: &serde_json::Value) -> RuntimeHealth {
+    match json.get("status").and_then(|s| s.as_str()) {
+        Some("ok") => RuntimeHealth::Healthy,
+        _ => RuntimeHealth::Degraded,
+    }
+}
+
 /// Lemonade runtime adapter.
 pub struct LemonadeRuntime {
     config: LemonadeConfig,
@@ -98,8 +117,13 @@ impl ModelRuntime for LemonadeRuntime {
     }
 
     async fn health(&self) -> RuntimeHealth {
-        match self.client.get(self.url("/health")).send().await {
-            Ok(resp) if resp.status().is_success() => RuntimeHealth::Healthy,
+        // Lemonade 11.x serves its web UI (HTML, 200) at `/health`, so a 2xx there
+        // proves nothing. Use the JSON API and require `status == "ok"`.
+        match self.client.get(self.url(HEALTH_PATH)).headers(self.auth_headers()).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(json) => health_from_json(&json),
+                Err(_) => RuntimeHealth::Degraded,
+            },
             Ok(_) => RuntimeHealth::Degraded,
             Err(_) => RuntimeHealth::Unavailable,
         }
@@ -126,13 +150,11 @@ impl ModelRuntime for LemonadeRuntime {
 
     async fn ensure_model_available(&self, model_id: &str) -> Result<bool, String> {
         // Lemonade loads models via a dedicated endpoint
-        let body = serde_json::json!({
-            "model": model_id,
-        });
+        let body = load_body(model_id);
 
         let resp = self
             .client
-            .post(self.url("/v1/models/load"))
+            .post(self.url(LOAD_PATH))
             .headers(self.auth_headers())
             .json(&body)
             .send()
@@ -282,5 +304,20 @@ mod tests {
         let runtime = LemonadeRuntime::new(LemonadeConfig::default());
         assert_eq!(runtime.url("/health"), "http://127.0.0.1:8000/health");
         assert_eq!(runtime.url("/v1/models"), "http://127.0.0.1:8000/v1/models");
+    }
+
+    #[test]
+    fn lemonade_11_9_endpoint_paths_and_load_body() {
+        let runtime = LemonadeRuntime::new(LemonadeConfig::default());
+        assert_eq!(runtime.url(HEALTH_PATH), "http://127.0.0.1:8000/api/v1/health");
+        assert_eq!(runtime.url(LOAD_PATH), "http://127.0.0.1:8000/api/v1/load");
+        assert_eq!(load_body("m"), serde_json::json!({ "model_name": "m" }));
+    }
+
+    #[test]
+    fn health_requires_status_ok() {
+        assert_eq!(health_from_json(&serde_json::json!({"status": "ok", "version": "11.9.0"})), RuntimeHealth::Healthy);
+        assert_eq!(health_from_json(&serde_json::json!({"status": "starting"})), RuntimeHealth::Degraded);
+        assert_eq!(health_from_json(&serde_json::json!({})), RuntimeHealth::Degraded);
     }
 }
