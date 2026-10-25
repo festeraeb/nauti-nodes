@@ -173,6 +173,8 @@ pub struct ProviderPolicy {
     pub allow_federated: bool,
     pub allow_datacenter: bool,
     pub allow_remote: bool,
+    /// Rank remote inference APIs ahead of every other kind ("internet-first").
+    pub prefer_remote: bool,
     pub maximum_cost_units: Option<f64>,
 }
 
@@ -183,8 +185,42 @@ impl Default for ProviderPolicy {
             allow_federated: true,
             allow_datacenter: false,
             allow_remote: false,
+            prefer_remote: false,
             maximum_cost_units: None,
         }
+    }
+}
+
+impl ProviderPolicy {
+    /// Policy for a route order setting: "local-first" or "internet-first".
+    pub fn from_route_order(order: &str) -> Option<Self> {
+        let prefer_remote = match order.trim().to_lowercase().as_str() {
+            "local-first" => false,
+            "internet-first" => true,
+            _ => return None,
+        };
+        Some(ProviderPolicy {
+            prefer_local: true,
+            allow_remote: true,
+            prefer_remote,
+            ..Default::default()
+        })
+    }
+}
+
+/// Selection rank of a provider kind under a policy (lower is tried first).
+pub fn provider_rank(kind: ProviderKind, policy: &ProviderPolicy) -> u8 {
+    let base = match kind {
+        ProviderKind::LocalWorker if policy.prefer_local => 0,
+        ProviderKind::LocalWorker => 1,
+        ProviderKind::FederatedWorker => 1,
+        ProviderKind::DatacenterPool => 2,
+        ProviderKind::RemoteInferenceApi => 3,
+    };
+    match (policy.prefer_remote, kind) {
+        (true, ProviderKind::RemoteInferenceApi) => 0,
+        (true, _) => base + 1,
+        (false, _) => base,
     }
 }
 
@@ -275,13 +311,7 @@ pub async fn select_provider_with_metrics(
             continue;
         }
 
-        let local_rank = match caps.kind {
-            ProviderKind::LocalWorker if policy.prefer_local => 0,
-            ProviderKind::FederatedWorker => 1,
-            ProviderKind::DatacenterPool => 2,
-            ProviderKind::RemoteInferenceApi => 3,
-            ProviderKind::LocalWorker => 1,
-        };
+        let local_rank = provider_rank(caps.kind, policy);
 
         candidates.push((
             local_rank,
