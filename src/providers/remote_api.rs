@@ -9,15 +9,19 @@ use crate::runtime::{ChatMessage, InferenceResponse, ModelRuntime};
 /// after the word "status " (e.g. "... returned status 503 Service
 /// Unavailable" -> Some(503)). None when there is none.
 pub fn status_in_error(err: &str) -> Option<u16> {
-    let _ = err;
-    todo!("NN1c: implement status_in_error")
+    let (_, after) = err.split_once("status ")?;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.len() == 3 {
+        digits.parse().ok()
+    } else {
+        None
+    }
 }
 
 /// True when the error means "try the next model": status 404, 410, 429 or
 /// any 500-599. False for every other status and for errors with no status.
 pub fn should_try_next_model(err: &str) -> bool {
-    let _ = err;
-    todo!("NN1c: implement should_try_next_model")
+    matches!(status_in_error(err), Some(404 | 410 | 429 | 500..=599))
 }
 
 /// Call `runtime.infer` with each id in `models`, in order. Return the first
@@ -31,6 +35,16 @@ pub async fn infer_with_fallback(
     messages: Vec<ChatMessage>,
     max_tokens: Option<u32>,
 ) -> Result<InferenceResponse, String> {
-    let _ = (runtime, models, messages, max_tokens);
-    todo!("NN1c: implement infer_with_fallback")
+    let mut last_err = None;
+    for model in models {
+        match runtime.infer(model, messages.clone(), max_tokens).await {
+            Ok(mut r) => {
+                r.model = model.clone();
+                return Ok(r);
+            }
+            Err(e) if should_try_next_model(&e) => last_err = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "no remote models configured".to_string()))
 }

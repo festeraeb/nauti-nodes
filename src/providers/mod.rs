@@ -13,6 +13,8 @@ pub mod federated;
 pub use federated::FederatedWorkerProvider;
 pub use local::LocalWorkerProvider;
 pub mod local;
+pub mod self_endpoint;
+pub mod remote_api;
 
 use crate::api::handlers::InferenceRequest;
 pub use crate::capabilities::PrivacyClass;

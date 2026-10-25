@@ -13,6 +13,18 @@
 /// brackets ("[::1]:8080") is taken without the brackets. An empty host gives
 /// false.
 pub fn is_self_endpoint(url: &str, self_addrs: &[String]) -> bool {
-    let _ = (url, self_addrs);
-    todo!("NN1a: implement is_self_endpoint")
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = match authority.strip_prefix('[') {
+        Some(inner) => inner.split(']').next().unwrap_or(""),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    if host.is_empty() {
+        return false;
+    }
+    ["127.0.0.1", "localhost", "::1"]
+        .iter()
+        .copied()
+        .chain(self_addrs.iter().map(String::as_str))
+        .any(|a| a.eq_ignore_ascii_case(host))
 }
