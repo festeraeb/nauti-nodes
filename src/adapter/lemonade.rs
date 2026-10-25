@@ -65,6 +65,14 @@ fn health_from_json(json: &serde_json::Value) -> RuntimeHealth {
     }
 }
 
+/// Lemonade's version from a `/api/v1/health` JSON body (top-level `"version"`).
+pub fn version_from_health(json: &serde_json::Value) -> Option<String> {
+    match json.get("version").and_then(|v| v.as_str()) {
+        Some(v) if !v.is_empty() => Some(v.to_string()),
+        _ => None,
+    }
+}
+
 /// Lemonade runtime adapter.
 pub struct LemonadeRuntime {
     config: LemonadeConfig,
@@ -95,12 +103,26 @@ impl LemonadeRuntime {
         }
         headers
     }
+
+    /// One GET of `/api/v1/health`: health state plus the reported version.
+    async fn health_and_version(&self) -> (RuntimeHealth, Option<String>) {
+        // Lemonade 11.x serves its web UI (HTML, 200) at `/health`, so a 2xx there
+        // proves nothing. Use the JSON API and require `status == "ok"`.
+        match self.client.get(self.url(HEALTH_PATH)).headers(self.auth_headers()).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(json) => (health_from_json(&json), version_from_health(&json)),
+                Err(_) => (RuntimeHealth::Degraded, None),
+            },
+            Ok(_) => (RuntimeHealth::Degraded, None),
+            Err(_) => (RuntimeHealth::Unavailable, None),
+        }
+    }
 }
 
 #[async_trait]
 impl ModelRuntime for LemonadeRuntime {
     async fn probe(&self) -> RuntimeProbe {
-        let health = self.health().await;
+        let (health, software_version) = self.health_and_version().await;
         let models = self.list_models().await;
 
         RuntimeProbe {
@@ -112,21 +134,12 @@ impl ModelRuntime for LemonadeRuntime {
             supports_embeddings: false,
             endpoint_url: self.config.base_url.clone(),
             runtime_confidence: 0.7, // richer API = higher initial confidence
-            software_version: None,
+            software_version,
         }
     }
 
     async fn health(&self) -> RuntimeHealth {
-        // Lemonade 11.x serves its web UI (HTML, 200) at `/health`, so a 2xx there
-        // proves nothing. Use the JSON API and require `status == "ok"`.
-        match self.client.get(self.url(HEALTH_PATH)).headers(self.auth_headers()).send().await {
-            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
-                Ok(json) => health_from_json(&json),
-                Err(_) => RuntimeHealth::Degraded,
-            },
-            Ok(_) => RuntimeHealth::Degraded,
-            Err(_) => RuntimeHealth::Unavailable,
-        }
+        self.health_and_version().await.0
     }
 
     async fn list_models(&self) -> Vec<String> {
