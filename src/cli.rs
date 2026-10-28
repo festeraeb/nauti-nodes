@@ -98,7 +98,7 @@ pub fn run_preflight(config: &Config, json_output: bool) -> Result<PreflightRepo
     let (gpu_vendor, gpu_model, vram) = if let Some(g) = gpus.first() {
         (g.vendor.clone(), g.name.clone(), g.total_memory_mb as u64)
     } else {
-        ("Unknown".into(), config.worker_gpu.clone(), 8192u64)
+        ("Unknown".into(), config.worker_gpu.clone(), 0u64)
     };
 
     // Check runtime binary or endpoint
@@ -312,7 +312,7 @@ pub fn generate_compatibility_report(config: &Config) -> Result<CompatibilityRep
     let (vendor, model, vram) = if let Some(g) = gpus.first() {
         (g.vendor.clone(), g.name.clone(), g.total_memory_mb as u64)
     } else {
-        ("Unknown".into(), config.worker_gpu.clone(), 8192u64)
+        ("Unknown".into(), config.worker_gpu.clone(), 0u64)
     };
 
     let report = CompatibilityReport {

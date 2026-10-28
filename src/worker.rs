@@ -65,8 +65,10 @@ pub async fn run_worker(config: Config) -> Result<()> {
                 "strict alpha mode requires physical GPU hardware discovery".into(),
             ));
         }
-        warn!("no GPU discovered; using fallback configuration");
-        (config.worker_gpu.clone(), 8192)
+        // Report what was measured: no GPU, 0 MiB. A made-up VRAM figure here would make the
+        // coordinator schedule work onto a card that is not there.
+        warn!("no GPU discovered; registering with vram_mb = 0");
+        (config.worker_gpu.clone(), 0)
     };
 
     let register_url = format!(
@@ -193,7 +195,7 @@ pub fn local_worker_meta(config: &Config) -> NodeMetadata {
         capabilities: NodeCapabilities {
             max_batch: 1,
             models: vec![config.worker_role.clone()],
-            vram_mb: 8192,
+            vram_mb: 0, // unknown: not measured here; never invent a figure
             role: config.worker_role.clone(),
         },
         ..Default::default()

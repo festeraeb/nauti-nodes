@@ -396,7 +396,7 @@ pub struct PreemptionResult {
     /// Number of jobs killed (no checkpoint)
     pub jobs_killed: u32,
 
-    /// VRAM released in MiB
+    /// VRAM released in MiB. Always 0 until jobs record their real allocation; never estimated.
     pub vram_released_mb: u64,
 
     /// Preempted job IDs
@@ -451,7 +451,7 @@ impl PreemptionManager {
         let mut jobs_preempted = 0u32;
         let mut jobs_checkpointed = 0u32;
         let mut jobs_killed = 0u32;
-        let mut vram_released = 0u64;
+        let vram_released = 0u64;
 
         // Find jobs on the requested node
         let node_jobs: Vec<String> = jobs
@@ -472,7 +472,7 @@ impl PreemptionManager {
                 }
                 job.preempt();
                 jobs_preempted += 1;
-                vram_released += 8192; // assume ~8GB per job
+                // Jobs carry no VRAM figure, so none is claimed (was an assumed 8192 MiB each).
                 preempted_jobs.push(job_id);
             }
         }

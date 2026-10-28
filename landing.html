@@ -263,28 +263,26 @@
         // Live Stats Fetching
         async function updateStats() {
             try {
-                // In a real environment, these would be actual endpoints
-                // We use a fallback to simulate live data if fetch fails
+                // Show only what the endpoints return. No endpoint, no number.
                 const [nodesRes, missionsRes] = await Promise.all([
                     fetch('/cluster/nodes').catch(() => null),
                     fetch('/webhook/missions').catch(() => null)
                 ]);
 
-                const nodes = nodesRes ? await nodesRes.json() : { count: 1240, tiles: 85000, models: 12, missions: 4, wrecks: 142 };
+                const nodes = (nodesRes && nodesRes.ok) ? await nodesRes.json() : null;
+                if (!nodes) throw new Error('cluster endpoint unavailable');
                 const missions = missionsRes ? await missionsRes.json() : null;
 
-                document.getElementById('stat-gpus').innerText = nodes.count.toLocaleString();
-                document.getElementById('stat-tiles').innerText = (nodes.tiles || 85000).toLocaleString();
-                document.getElementById('stat-models').innerText = nodes.models;
-                document.getElementById('stat-missions').innerText = nodes.missions;
-                document.getElementById('stat-wrecks').innerText = nodes.wrecks;
+                document.getElementById('stat-gpus').innerText = (nodes.count ?? '—').toLocaleString();
+                document.getElementById('stat-tiles').innerText = (nodes.tiles ?? '—').toLocaleString();
+                document.getElementById('stat-models').innerText = nodes.models ?? '—';
+                document.getElementById('stat-missions').innerText = nodes.missions ?? '—';
+                document.getElementById('stat-wrecks').innerText = nodes.wrecks ?? '—';
             } catch (e) {
-                // Fallback for demo purposes
-                document.getElementById('stat-gpus').innerText = "1,240";
-                document.getElementById('stat-tiles').innerText = "85,432";
-                document.getElementById('stat-models').innerText = "12";
-                document.getElementById('stat-missions').innerText = "4";
-                document.getElementById('stat-wrecks').innerText = "142";
+                // Endpoint unreachable: show dashes, not invented figures.
+                for (const id of ['stat-gpus','stat-tiles','stat-models','stat-missions','stat-wrecks']) {
+                    document.getElementById(id).innerText = "—";
+                }
             }
         }
 
