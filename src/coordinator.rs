@@ -66,7 +66,10 @@ pub async fn run_coordinator(config: Config) -> Result<()> {
     });
 
     let app = api::routes::router(state);
-    let addr = format!("0.0.0.0:{}", config.listen_port);
+    let addr = format!("{}:{}", config.listen_address, config.listen_port);
+    if config.nexus_ingress_only && config.listen_address == "0.0.0.0" {
+        tracing::warn!("nexus_ingress_only is set but the API binds 0.0.0.0: X-Nexus-Peer-* headers from a direct LAN client would be trusted; set NAUTI_LISTEN_ADDRESS=127.0.0.1");
+    }
     info!(%addr, forge = %config.forge_url, "NautiInferer coordinator listening");
 
     let listener = tokio::net::TcpListener::bind(&addr)
