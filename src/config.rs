@@ -11,6 +11,11 @@ pub enum RuntimeMode {
 pub struct Config {
     pub mode: RuntimeMode,
     pub listen_port: u16,
+    /// Address the HTTP API binds. Default 0.0.0.0 (every interface). Set
+    /// 127.0.0.1 when the coordinator sits behind the Lemonade Nexus service
+    /// ingress with `nexus_ingress_only`: the X-Nexus-Peer-* headers are only
+    /// trustworthy when nothing else can reach the listener. Env NAUTI_LISTEN_ADDRESS.
+    pub listen_address: String,
     pub db_url: String,
     pub auth_keypair_path: String,
     pub identity_path: String,
@@ -34,6 +39,13 @@ pub struct Config {
     pub trusted_coordinator_keys: Vec<String>,
     /// Chunk 8: federation peer URLs (coordinator base URLs).
     pub federation_peers: Vec<String>,
+    /// Trust `X-Nexus-Peer-*` headers as the worker identity on join and refuse
+    /// unattributed joins. Only safe on a listener reachable solely through the
+    /// Lemonade Nexus service ingress. Env `NAUTI_NEXUS_INGRESS_ONLY=1`.
+    pub nexus_ingress_only: bool,
+    /// The Nexus permission a worker needs to join (`admin` always passes).
+    /// Env `NAUTI_NEXUS_REQUIRED_PERMISSION`.
+    pub nexus_required_permission: String,
 }
 
 impl Default for Config {
@@ -41,6 +53,7 @@ impl Default for Config {
         Self {
             mode: RuntimeMode::Coordinator,
             listen_port: 8099,
+            listen_address: "0.0.0.0".to_string(),
             db_url: "sqlite:nauti.db".to_string(),
             auth_keypair_path: "/var/lib/nauti-inferer/auth.key".to_string(),
             identity_path: "/var/lib/nauti-nodes/identity.json".to_string(),
@@ -58,6 +71,8 @@ impl Default for Config {
             coordinator_identity_path: None,
             trusted_coordinator_keys: Vec::new(),
             federation_peers: Vec::new(),
+            nexus_ingress_only: false,
+            nexus_required_permission: crate::node::nexus_peer::DEFAULT_REQUIRED_PERMISSION.to_string(),
         }
     }
 }
@@ -93,6 +108,19 @@ impl Config {
         }
         if let Ok(v) = std::env::var("LOCAL_INFERENCE_URL") {
             c.local_inference_url = v;
+        }
+        if let Ok(v) = std::env::var("NAUTI_LISTEN_ADDRESS") {
+            if !v.trim().is_empty() {
+                c.listen_address = v.trim().to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("NAUTI_NEXUS_INGRESS_ONLY") {
+            c.nexus_ingress_only = matches!(v.trim(), "1" | "true" | "yes" | "on");
+        }
+        if let Ok(v) = std::env::var("NAUTI_NEXUS_REQUIRED_PERMISSION") {
+            if !v.trim().is_empty() {
+                c.nexus_required_permission = v.trim().to_string();
+            }
         }
         if let Ok(v) = std::env::var("NAUTI_WORKER_ID") {
             c.worker_id = v;

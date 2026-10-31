@@ -1502,8 +1502,16 @@ pub struct JoinRequest {
 
 pub async fn node_join(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<JoinRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Nexus attribution first: with NAUTI_NEXUS_INGRESS_ONLY the worker's
+    // identity is the mesh-attributed peer, and a body that names anyone else
+    // is refused before the lineage is touched.
+    let nexus_peer = crate::node::nexus_peer::NexusGate::from_config(&state.config)
+        .admit(&headers, &req.node_id)
+        .map_err(|e| (StatusCode::FORBIDDEN, e.to_string()))?;
+
     let lineage = state.lineage.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "lineage not initialized".to_string(),
@@ -1513,7 +1521,14 @@ pub async fn node_join(
         .add_child(&req.node_id, &req.parent_node_id)
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
-    info!(child = %req.node_id, parent = %req.parent_node_id, depth = rel.depth, "node joined lineage");
+    match &nexus_peer {
+        Some(peer) => info!(
+            child = %req.node_id, parent = %req.parent_node_id, depth = rel.depth,
+            nexus_peer = %peer.node_id, nexus_key = %peer.key,
+            "node joined lineage (Nexus-attributed)"
+        ),
+        None => info!(child = %req.node_id, parent = %req.parent_node_id, depth = rel.depth, "node joined lineage"),
+    }
 
     Ok(Json(serde_json::json!({
         "node_id": req.node_id,
@@ -1522,6 +1537,13 @@ pub async fn node_join(
         "branch_id": rel.branch_id,
         "depth": rel.depth,
         "status": "active",
+        "nexus_peer": nexus_peer.map(|p| serde_json::json!({
+            "node_id": p.node_id,
+            "key": p.key,
+            "permissions": p.permissions,
+            "family": p.family,
+        })),
+        "identity_source": if state.config.nexus_ingress_only { "nexus-ingress" } else { "body" },
     })))
 }
 
